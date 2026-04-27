@@ -1,5 +1,6 @@
 """Verify all services are working."""
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -38,7 +39,7 @@ def test_langsmith():
     from langsmith import Client
     client = Client()
     client.list_runs(project_name=os.getenv("LANGSMITH_PROJECT"), limit=1)
-    print(f"✅ LangSmith: connected")
+    print("✅ LangSmith: connected")
 
 if __name__ == "__main__":
     test_groq()
