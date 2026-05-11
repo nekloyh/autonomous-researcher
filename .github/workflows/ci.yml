@@ -1,9 +1,9 @@
 name: CI
 
+# Temporarily disabled automatic CI/CD triggers.
+# Re-enable push/pull_request triggers when the project is stable again.
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   lint-and-test:

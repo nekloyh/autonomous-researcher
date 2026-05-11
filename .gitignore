@@ -25,6 +25,7 @@ venv/
 # Runtime artefacts
 .checkpoints.db
 .checkpoints.db-journal
+.checkpoints.*
 outputs/
 evaluation_outputs/
 qdrant_storage/
@@ -35,6 +36,14 @@ qdrant_storage/
 .ruff_cache/
 .cache/
 
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
 # Local-only docs / archives
 /docs
 *.zip
+/notes
+
+CLAUDE.md
