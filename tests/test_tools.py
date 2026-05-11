@@ -37,7 +37,9 @@ def test_web_search_uses_tavily(mock_tavily):
             {"title": "Test", "url": "https://example.com", "content": "snippet"}
         ]
     }
-    out = web_search.invoke({"query": "anything unique 12345"})
+    with patch("app.tools.web_search.DDGS") as mock_ddgs:
+        mock_ddgs.side_effect = RuntimeError("ddg unavailable")
+        out = web_search.invoke({"query": "anything unique 12345"})
     assert "example.com" in out
     assert "[1]" in out
 
