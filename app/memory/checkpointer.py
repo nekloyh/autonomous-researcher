@@ -4,25 +4,26 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from langgraph.checkpoint.sqlite import SqliteSaver
+import aiosqlite
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 CHECKPOINT_DB = Path(".checkpoints.db")
 
-_saver: SqliteSaver | None = None
+_saver: AsyncSqliteSaver | None = None
 
 
-def get_checkpointer() -> SqliteSaver:
-    """Return a process-wide SqliteSaver bound to .checkpoints.db.
+def get_checkpointer() -> AsyncSqliteSaver:
+    """Return a process-wide AsyncSqliteSaver bound to .checkpoints.db.
 
-    LangGraph's SqliteSaver normally needs to live inside a `with` block; we
+    LangGraph's AsyncSqliteSaver normally needs to live inside a `with` block; we
     use a long-lived sqlite3 connection (check_same_thread=False) so the saver
     can be used across the application's lifetime.
     """
     global _saver
     if _saver is not None:
         return _saver
-    conn = sqlite3.connect(str(CHECKPOINT_DB), check_same_thread=False)
-    _saver = SqliteSaver(conn)
+    conn = aiosqlite.connect(str(CHECKPOINT_DB), check_same_thread=False)
+    _saver = AsyncSqliteSaver(conn)
     return _saver
 
 

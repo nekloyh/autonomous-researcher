@@ -11,6 +11,7 @@ from typing import Any
 
 import streamlit as st
 
+from app.config import is_development
 from app.graph import get_graph
 from app.memory.checkpointer import get_checkpointer
 from app.state import AgentState
@@ -44,7 +45,7 @@ def _initial_state(query: str, session_id: str) -> AgentState:
 
 
 async def _run(query: str, session_id: str, slots: dict[str, Any]):
-    graph = get_graph(checkpointer=get_checkpointer())
+    graph = get_graph(checkpointer=None if is_development() else get_checkpointer())
     config = {"configurable": {"thread_id": session_id}}
 
     plan_lines: list[str] = []

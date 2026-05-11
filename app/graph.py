@@ -49,9 +49,17 @@ def fan_out_or_synthesize(state: AgentState):
     ]
 
 
-def after_researcher(state: AgentState) -> Literal["fan_out", "synthesizer"]:
+def after_researcher(state: AgentState):
     """Send another researcher batch if there are pending tasks; else synthesize."""
-    return "fan_out" if _ready_tasks(state) else "synthesizer"
+    ready = _ready_tasks(state)
+    if not ready:
+        return "synthesizer"
+    return "fan_out"
+
+
+def fan_out_node(state: AgentState) -> dict:
+    """Barrier node before dispatching the next researcher batch."""
+    return {}
 
 
 def after_critic(state: AgentState) -> Literal["replan", "finalize"]:
@@ -83,6 +91,7 @@ def build_graph(checkpointer=None):
     g = StateGraph(AgentState)
 
     g.add_node("planner", planner_node)
+    g.add_node("fan_out", fan_out_node)
     g.add_node("researcher", researcher_node)
     g.add_node("synthesizer", synthesizer_node)
     g.add_node("critic", critic_node)
@@ -105,7 +114,12 @@ def build_graph(checkpointer=None):
     g.add_conditional_edges(
         "researcher",
         after_researcher,
-        {"fan_out": "researcher", "synthesizer": "synthesizer"},
+        ["fan_out", "synthesizer"],
+    )
+    g.add_conditional_edges(
+        "fan_out",
+        fan_out_or_synthesize,
+        ["researcher", "synthesizer"],
     )
 
     g.add_edge("synthesizer", "critic")

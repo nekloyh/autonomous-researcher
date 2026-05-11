@@ -4,7 +4,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from app.config import MAX_SUBTASKS, get_planner_llm
+from app.config import MAX_SUBTASKS, get_planner_llm, is_development
 from app.prompts import PLANNER_PROMPT
 from app.prompts.planner import PROMPT_VERSION
 from app.state import AgentState, SubTask
@@ -37,6 +37,21 @@ def _invoke_planner(prompt: str) -> ResearchPlan:
 def planner_node(state: AgentState) -> dict:
     """Planning node — runs at start and on each replan."""
     iteration = state.get("current_iteration", 0)
+
+    if is_development():
+        query = state["user_query"]
+        return {
+            "plan": [
+                {
+                    "id": "task_1",
+                    "question": f"Development-mode summary for: {query}",
+                    "rationale": "Deterministic local stub; no external LLM calls.",
+                    "dependencies": [],
+                    "status": "pending",
+                }
+            ],
+            "current_iteration": iteration + 1,
+        }
 
     previous_context = ""
     if state.get("critiques"):

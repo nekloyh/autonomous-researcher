@@ -37,6 +37,7 @@ dependencies = [
     "uvicorn>=0.32.0",
     "sse-starlette>=2.1.0",
     "slowapi>=0.1.9",
+    "aiosqlite>=0.22.1",
 ]
 
 [project.optional-dependencies]

@@ -18,6 +18,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from sse_starlette.sse import EventSourceResponse
 
+from app.config import is_development
 from app.graph import get_graph
 from app.memory.checkpointer import get_checkpointer
 from app.state import AgentState
@@ -95,6 +96,8 @@ def _initial_state(query: str, session_id: str) -> AgentState:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    from app.config import APP_MODE
+
     qdrant_ok = True
     try:
         from qdrant_client import QdrantClient
@@ -104,14 +107,14 @@ def health() -> dict[str, Any]:
         QdrantClient(url=QDRANT_URL).get_collections()
     except Exception:
         qdrant_ok = False
-    return {"status": "ok", "version": API_VERSION, "qdrant": qdrant_ok}
+    return {"status": "ok", "version": API_VERSION, "mode": APP_MODE, "qdrant": qdrant_ok}
 
 
 @app.post("/research", response_model=ResearchResponse)
 @limiter.limit("5/minute")
 async def research(request: Request, body: ResearchRequest):
     session_id = body.session_id or str(uuid.uuid4())[:8]
-    graph = get_graph(checkpointer=get_checkpointer())
+    graph = get_graph(checkpointer=None if is_development() else get_checkpointer())
     config = {"configurable": {"thread_id": session_id}}
     final = await graph.ainvoke(_initial_state(body.query, session_id), config=config)
     return ResearchResponse(
@@ -150,7 +153,7 @@ def _summarize(node: str, update: dict[str, Any]) -> dict[str, Any]:
 @limiter.limit("5/minute")
 async def research_stream(request: Request, body: ResearchRequest):
     session_id = body.session_id or str(uuid.uuid4())[:8]
-    graph = get_graph(checkpointer=get_checkpointer())
+    graph = get_graph(checkpointer=None if is_development() else get_checkpointer())
     config = {"configurable": {"thread_id": session_id}}
 
     async def event_generator() -> AsyncGenerator[dict[str, Any], None]:

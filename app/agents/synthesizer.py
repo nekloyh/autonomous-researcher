@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-from app.config import get_synthesizer_llm
+from app.config import get_synthesizer_llm, is_development
 from app.prompts import SYNTHESIZER_PROMPT
 from app.prompts.synthesizer import PROMPT_VERSION
 from app.state import AgentState
@@ -46,6 +46,22 @@ def _whitelist_citations(draft: str, findings: list[dict]) -> list[str]:
 
 def synthesizer_node(state: AgentState) -> dict:
     findings = state.get("findings", [])
+
+    if is_development():
+        lines = [
+            f"# Development Report: {state['user_query']}",
+            "",
+            "This report was generated in development mode without external LLM, search, or fetch calls.",
+            "",
+            "## Findings",
+        ]
+        if findings:
+            for f in findings:
+                lines.append(f"- {f.get('task_id', 'task')}: {f.get('content', '').strip()}")
+        else:
+            lines.append("- No findings were produced.")
+        return {"draft_report": "\n".join(lines), "citations": []}
+
     prompt = SYNTHESIZER_PROMPT.format(
         query=state["user_query"],
         findings=_format_findings(findings),

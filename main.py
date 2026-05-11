@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from app.config import is_development
 from app.graph import get_graph
 from app.memory.checkpointer import get_checkpointer
 from app.memory.long_term import SemanticMemory
@@ -80,7 +81,7 @@ async def _run(query: str, session_id: str, stream: bool, use_memory: bool) -> d
             print(f"[memory] hit (similarity {cached['score']:.2f}, age {cached['age_days']}d)")
             return {"final_report": cached["final_report"], "citations": cached.get("citations", [])}
 
-    graph = get_graph(checkpointer=get_checkpointer())
+    graph = get_graph(checkpointer=None if is_development() else get_checkpointer())
     state = _initial_state(query, session_id)
     config = {"configurable": {"thread_id": session_id}}
 
@@ -91,7 +92,7 @@ async def _run(query: str, session_id: str, stream: bool, use_memory: bool) -> d
                 print(f"[{node}] {_summarize_update(node, update)}", flush=True)
             last_state.update(update)
 
-    final = graph.get_state(config).values
+    final = (await graph.aget_state(config)).values
     if use_memory and final.get("final_report"):
         SemanticMemory().store(
             query=query,

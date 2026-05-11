@@ -67,6 +67,9 @@ uv sync --all-extras
 cp .env.example .env
 $EDITOR .env
 
+# Development mode is the default and uses deterministic local stubs, so CLI/API/UI
+# runs do not spend LLM or search quota. Set APP_MODE=production to use real providers.
+
 # 3. Start Qdrant + ingest seed corpus
 docker compose up -d qdrant
 uv run python scripts/ingest_corpus.py

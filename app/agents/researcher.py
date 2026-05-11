@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 
 from langgraph.prebuilt import create_react_agent
 
-from app.config import REACT_MAX_STEPS, get_researcher_llm
+from app.config import REACT_MAX_STEPS, get_researcher_llm, is_development
 from app.prompts import RESEARCHER_PROMPT
 from app.prompts.researcher import PROMPT_VERSION
 from app.state import Finding, ResearcherState
@@ -64,6 +64,19 @@ def _confidence(num_sources: int, num_unique_domains: int) -> float:
 def researcher_node(state: ResearcherState) -> dict:
     """Run the ReAct agent on one sub-task. Called via Send() in parallel."""
     task = state["task"]
+
+    if is_development():
+        finding: Finding = {
+            "task_id": task["id"],
+            "content": (
+                f"Development-mode finding for '{task['question']}'. "
+                "External LLM and tool calls are disabled."
+            ),
+            "sources": [],
+            "confidence": 0.5,
+            "tool_calls": 0,
+        }
+        return {"findings": [finding], "total_tool_calls": 0}
 
     system_msg = RESEARCHER_PROMPT.format(
         user_query=state["user_query"],

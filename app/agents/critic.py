@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.config import MAX_ITERATIONS, get_critic_llm
+from app.config import MAX_ITERATIONS, get_critic_llm, is_development
 from app.prompts import CRITIC_PROMPT
 from app.prompts.critic import PROMPT_VERSION
 from app.state import AgentState, Critique
@@ -44,6 +44,17 @@ def _iteration_threshold(iteration: int) -> float:
 
 def critic_node(state: AgentState) -> dict:
     iteration = state.get("current_iteration", 1)
+
+    if is_development():
+        critique: Critique = {
+            "is_complete": True,
+            "quality_score": 1.0,
+            "missing_info": [],
+            "factual_errors": [],
+            "suggestions": ["Development-mode critic stub; no external model call."],
+        }
+        return {"critiques": [critique]}
+
     prev = "\n".join(
         f"- iter {i + 1}: score={c.get('quality_score', 0):.2f}, complete={c.get('is_complete')}"
         for i, c in enumerate(state.get("critiques", []))
