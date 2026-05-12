@@ -18,7 +18,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from sse_starlette.sse import EventSourceResponse
 
-from app.config import is_development
+from app.config import MAX_ITERATIONS, is_development
 from app.graph import get_graph
 from app.memory.checkpointer import get_checkpointer
 from app.state import AgentState
@@ -82,7 +82,7 @@ def _initial_state(query: str, session_id: str) -> AgentState:
         "started_at": datetime.now(),
         "plan": [],
         "current_iteration": 0,
-        "max_iterations": 0,
+        "max_iterations": MAX_ITERATIONS,
         "findings": [],
         "draft_report": "",
         "critiques": [],
@@ -127,25 +127,41 @@ async def research(request: Request, body: ResearchRequest):
 
 
 def _summarize(node: str, update: dict[str, Any]) -> dict[str, Any]:
-    out = {"node": node}
+    out: dict[str, Any] = {"node": node}
     if node in ("planner", "replan"):
-        out["plan_size"] = len(update.get("plan") or [])
+        plan = update.get("plan") or []
+        out["plan_size"] = len(plan)
         out["iteration"] = update.get("current_iteration")
+        out["tasks"] = [
+            {"id": t.get("id"), "question": t.get("question"), "rationale": t.get("rationale")}
+            for t in plan
+        ]
+        out["tokens"] = update.get("total_tokens_used") or 0
     elif node == "researcher":
         f = (update.get("findings") or [{}])[0]
+        content = f.get("content") or ""
         out["task_id"] = f.get("task_id")
-        out["sources"] = len(f.get("sources", []))
+        out["sources"] = f.get("sources") or []
         out["confidence"] = f.get("confidence")
+        out["tool_calls"] = f.get("tool_calls")
+        out["claims_count"] = len(f.get("claims") or [])
+        out["excerpt"] = content[:300]
+        out["tokens"] = update.get("total_tokens_used") or 0
     elif node == "synthesizer":
         out["draft_words"] = len((update.get("draft_report") or "").split())
-        out["citations"] = len(update.get("citations") or [])
+        out["citations"] = update.get("citations") or []
+        out["tokens"] = update.get("total_tokens_used") or 0
     elif node == "critic":
         c = (update.get("critiques") or [{}])[-1]
         out["score"] = c.get("quality_score")
         out["is_complete"] = c.get("is_complete")
-        out["missing"] = len(c.get("missing_info") or [])
+        out["missing"] = c.get("missing_info") or []
+        out["factual_errors"] = c.get("factual_errors") or []
+        out["suggestions"] = c.get("suggestions") or []
+        out["tokens"] = update.get("total_tokens_used") or 0
     elif node == "finalize":
-        out["final_words"] = len((update.get("final_report") or "").split())
+        final = update.get("final_report") or ""
+        out["final_words"] = len(final.split())
     return out
 
 

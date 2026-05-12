@@ -11,9 +11,16 @@ class SubTask(TypedDict):
     dependencies: list[str]    # IDs của tasks cần chạy trước
     status: Literal["pending", "running", "done", "failed"]
 
-class Finding(TypedDict):
+class Claim(TypedDict):
+    statement: str             # Atomic factual claim (1 sentence)
+    source_url: str            # URL backing this claim
+    snippet: str               # ≤300 chars from the source supporting it
+    confidence: float          # 0-1
+
+class Finding(TypedDict, total=False):
     task_id: str
-    content: str               # Facts summary
+    content: str               # Narrative summary (kept for backward compat)
+    claims: list[Claim]        # Structured atomic facts (preferred)
     sources: list[str]         # URLs
     confidence: float          # 0-1
     tool_calls: int            # Số tool calls đã dùng
@@ -52,7 +59,7 @@ class AgentState(TypedDict):
 
     # Meta
     total_tool_calls: int
-    total_tokens_used: int
+    total_tokens_used: Annotated[int, add]
     errors: Annotated[list[str], add]
 
 # Pre-researcher state

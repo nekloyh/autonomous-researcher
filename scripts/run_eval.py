@@ -11,12 +11,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from app.config import MAX_ITERATIONS
 from app.evaluation import TEST_SET, build_record, evaluate_records, run_heuristic_checks
 from app.graph import build_graph, reset_graph
 from app.memory.checkpointer import get_checkpointer
@@ -26,14 +26,14 @@ OUT_DIR = Path("evaluation_outputs")
 OUT_DIR.mkdir(exist_ok=True)
 
 
-def _initial_state(query: str, session_id: str) -> AgentState:
+def _initial_state(query: str, session_id: str, max_iter: int) -> AgentState:
     return {
         "user_query": query,
         "session_id": session_id,
         "started_at": datetime.now(),
         "plan": [],
         "current_iteration": 0,
-        "max_iterations": 0,
+        "max_iterations": max_iter,
         "findings": [],
         "draft_report": "",
         "critiques": [],
@@ -45,21 +45,21 @@ def _initial_state(query: str, session_id: str) -> AgentState:
     }
 
 
-async def _run_one(query: str) -> dict[str, Any]:
+async def _run_one(query: str, max_iter: int) -> dict[str, Any]:
     reset_graph()
     graph = build_graph(checkpointer=get_checkpointer())
     session_id = "eval_" + uuid.uuid4().hex[:6]
     config = {"configurable": {"thread_id": session_id}}
-    final = await graph.ainvoke(_initial_state(query, session_id), config=config)
+    final = await graph.ainvoke(_initial_state(query, session_id, max_iter), config=config)
     return final
 
 
-async def _run_set(queries: list[dict[str, Any]], label: str) -> list[dict[str, Any]]:
+async def _run_set(queries: list[dict[str, Any]], label: str, max_iter: int) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for i, q in enumerate(queries, 1):
         print(f"[{label}] {i}/{len(queries)} {q['id']} :: {q['query'][:80]}…", flush=True)
         try:
-            final = await _run_one(q["query"])
+            final = await _run_one(q["query"], max_iter)
         except Exception as e:
             print(f"  ! failed: {type(e).__name__}: {e}", flush=True)
             rows.append({"id": q["id"], "error": str(e)})
@@ -113,10 +113,10 @@ async def main_async(args: argparse.Namespace) -> None:
     queries = TEST_SET[: args.queries] if args.queries else TEST_SET
 
     if args.ab:
-        os.environ["MAX_RESEARCH_ITERATIONS"] = "1"
-        rows_off = await _run_set(queries, "critic_off")
-        os.environ["MAX_RESEARCH_ITERATIONS"] = "3"
-        rows_on = await _run_set(queries, "critic_on")
+        # Critic OFF == 1 iteration (planner → researchers → synthesizer → critic
+        # which auto-finishes at iter==max_iter). Critic ON == full MAX_ITERATIONS.
+        rows_off = await _run_set(queries, "critic_off", max_iter=1)
+        rows_on = await _run_set(queries, "critic_on", max_iter=MAX_ITERATIONS)
         ragas_off = _ragas_summary(rows_off)
         ragas_on = _ragas_summary(rows_on)
         report = {
@@ -126,7 +126,7 @@ async def main_async(args: argparse.Namespace) -> None:
             "critic_on": {"runs": rows_on, "ragas": ragas_on},
         }
     else:
-        rows = await _run_set(queries, "single")
+        rows = await _run_set(queries, "single", max_iter=MAX_ITERATIONS)
         ragas = _ragas_summary(rows)
         report = {
             "timestamp": datetime.now().isoformat(),

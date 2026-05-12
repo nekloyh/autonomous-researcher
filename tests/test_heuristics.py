@@ -1,5 +1,6 @@
 """Heuristic check unit tests."""
 from app.evaluation.heuristics import (
+    check_claims_supported,
     check_length_reasonable,
     check_no_empty_sections,
     check_report_has_citations,
@@ -29,13 +30,27 @@ GOOD_REPORT = (
 
 
 def test_good_report_passes_all():
-    state = {"final_report": GOOD_REPORT, "current_iteration": 2}
+    state = {
+        "final_report": GOOD_REPORT,
+        "current_iteration": 2,
+        "findings": [
+            {
+                "claims": [
+                    {
+                        "statement": "Example company reported strong revenue",
+                        "snippet": "The example company reported strong revenue this quarter",
+                    }
+                ]
+            }
+        ],
+    }
     res = run_heuristic_checks(state)
     assert res["citations"]["passed"]
     assert res["sources_section"]["passed"]
     assert res["urls_valid"]["passed"]
     assert res["length_reasonable"]["passed"]
     assert res["iterations_terminated"]["passed"]
+    assert res["claims_supported"]["passed"]
     assert res["_summary"]["pass_rate"] >= 0.8
 
 
@@ -63,4 +78,43 @@ def test_invalid_urls_caught():
 def test_empty_sections_caught():
     bad = "# T\n\n## X\n\n## Y\n\n## Z\nactual content here"
     ok, _ = check_no_empty_sections(bad)
+    assert not ok
+
+
+def test_claims_supported_passes_when_snippet_overlaps():
+    state = {
+        "findings": [
+            {
+                "claims": [
+                    {
+                        "statement": "VNG reported Q3 2024 revenue of 2 trillion VND",
+                        "snippet": "VNG announced Q3 2024 revenue at 2 trillion VND in its filing",
+                    },
+                ]
+            }
+        ]
+    }
+    ok, _ = check_claims_supported(state)
+    assert ok
+
+
+def test_claims_supported_fails_when_no_overlap():
+    state = {
+        "findings": [
+            {
+                "claims": [
+                    {
+                        "statement": "Tigers walk on the moon every Tuesday",
+                        "snippet": "Soccer rules state offside positions cannot score",
+                    },
+                ]
+            }
+        ]
+    }
+    ok, _ = check_claims_supported(state)
+    assert not ok
+
+
+def test_claims_supported_no_claims_fails():
+    ok, _ = check_claims_supported({"findings": []})
     assert not ok

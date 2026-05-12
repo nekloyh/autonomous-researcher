@@ -1,5 +1,5 @@
 """Planner system prompt."""
-PROMPT_VERSION = "v2.1"
+PROMPT_VERSION = "v2.2"
 
 PLANNER_PROMPT = """\
 # Role

@@ -30,9 +30,9 @@ QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 
 # Configs
-MAX_ITERATIONS = int(os.getenv("MAX_RESEARCH_ITERATIONS", "2"))
-MAX_PARALLEL = int(os.getenv("MAX_PARALLEL_RESEARCHERS", "2"))
-MAX_SUBTASKS = int(os.getenv("MAX_SUBTASKS", "3"))
+MAX_ITERATIONS = int(os.getenv("MAX_RESEARCH_ITERATIONS", "3"))
+MAX_PARALLEL = int(os.getenv("MAX_PARALLEL_RESEARCHERS", "3"))
+MAX_SUBTASKS = int(os.getenv("MAX_SUBTASKS", "5"))
 REACT_MAX_STEPS = 6  # Max tool calls per researcher
 
 # Model factory
@@ -80,8 +80,23 @@ def get_critic_llm():
 
 @lru_cache
 def get_embeddings():
-    """Local embeddings via Ollama."""
+    """Embeddings provider.
+
+    Local Ollama (`nomic-embed-text`) by default. When `HF_SPACES=1` is set,
+    swap to a CPU-friendly HuggingFace model (Ollama isn't available on HF
+    Spaces).
+    """
+    if os.getenv("HF_SPACES", "").strip() == "1":
+        from langchain_huggingface import HuggingFaceEmbeddings
+
+        return HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2",
+            model_kwargs={"device": "cpu"},
+            encode_kwargs={"normalize_embeddings": True},
+        )
+
     from langchain_ollama import OllamaEmbeddings
+
     return OllamaEmbeddings(
         model="nomic-embed-text",
         base_url=OLLAMA_HOST,

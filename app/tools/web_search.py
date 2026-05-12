@@ -1,4 +1,9 @@
 """Web search tool with DuckDuckGo primary (free), Tavily fallback."""
+from __future__ import annotations
+
+import re
+import time
+
 from duckduckgo_search import DDGS
 from langchain_core.tools import tool
 from tavily import TavilyClient
@@ -6,8 +11,21 @@ from tavily import TavilyClient
 from app.config import TAVILY_API_KEY
 
 _tavily = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
-_cache: dict[str, str] = {}
+
+# Cache entries: query -> (stored_at_unix, formatted_result)
+_cache: dict[str, tuple[float, str]] = {}
 _CACHE_MAX = 500
+_CACHE_TTL_SECONDS = 3600  # 1 hour
+
+# If the query references a time horizon, skip cache so we don't serve stale data.
+_TIME_SENSITIVE_RE = re.compile(
+    r"\b(20\d{2}|Q[1-4]|today|latest|current|this (week|month|year)|recent|now)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_time_sensitive(query: str) -> bool:
+    return bool(_TIME_SENSITIVE_RE.search(query))
 
 
 def _format_results(results: list) -> str:
@@ -38,8 +56,17 @@ def web_search(query: str) -> str:
     Returns:
         Formatted string with top 5 results: title, URL, snippet.
     """
-    if query in _cache:
-        return _cache[query]
+    now = time.time()
+    time_sensitive = _is_time_sensitive(query)
+
+    if not time_sensitive:
+        cached = _cache.get(query)
+        if cached is not None:
+            stored_at, value = cached
+            if now - stored_at <= _CACHE_TTL_SECONDS:
+                return value
+            # Stale → drop and re-fetch below
+            _cache.pop(query, None)
 
     # DuckDuckGo primary (free, unlimited)
     try:
@@ -64,7 +91,8 @@ def web_search(query: str) -> str:
 
     out = _format_results(results)
 
-    if len(_cache) >= _CACHE_MAX:
-        _cache.pop(next(iter(_cache)))
-    _cache[query] = out
+    if not time_sensitive:
+        if len(_cache) >= _CACHE_MAX:
+            _cache.pop(next(iter(_cache)))
+        _cache[query] = (now, out)
     return out

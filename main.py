@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from app.config import is_development
+from app.config import MAX_ITERATIONS, is_development
 from app.graph import get_graph
 from app.memory.checkpointer import get_checkpointer
 from app.memory.long_term import SemanticMemory
@@ -32,7 +32,7 @@ def _initial_state(query: str, session_id: str) -> AgentState:
         "started_at": datetime.now(),
         "plan": [],
         "current_iteration": 0,
-        "max_iterations": 0,
+        "max_iterations": MAX_ITERATIONS,
         "findings": [],
         "draft_report": "",
         "critiques": [],
