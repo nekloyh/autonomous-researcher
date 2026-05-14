@@ -25,7 +25,7 @@ dependencies = [
     "rank-bm25>=0.2.2",
     # Search & scraping tools
     "tavily-python>=0.5.0",
-    "duckduckgo-search>=6.3.0",
+    "ddgs>=9.14.2",
     "requests>=2.32.0",
     "beautifulsoup4>=4.12.0",
     "markdownify>=0.13.0",

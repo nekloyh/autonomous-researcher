@@ -34,11 +34,16 @@ def _initial_state(query: str, session_id: str, max_iter: int) -> AgentState:
         "plan": [],
         "current_iteration": 0,
         "max_iterations": max_iter,
+        "gap_rounds": 0,
         "findings": [],
+        "source_candidates": [],
         "draft_report": "",
         "critiques": [],
         "final_report": "",
         "citations": [],
+        "quality_status": "unverified",
+        "quality_warnings": [],
+        "run_summary_path": "",
         "total_tool_calls": 0,
         "total_tokens_used": 0,
         "errors": [],
@@ -76,6 +81,19 @@ async def _run_set(queries: list[dict[str, Any]], label: str, max_iter: int) -> 
                 "query": q["query"],
                 "final_report": final.get("final_report", ""),
                 "citations": final.get("citations", []) or [],
+                "sourced_claims": sum(len(f.get("claims") or []) for f in final.get("findings", []) or []),
+                "unsupported_claims": sum(
+                    len(c.get("unsupported_claims") or [])
+                    for c in final.get("critiques", []) or []
+                ),
+                "gaps": [
+                    gap
+                    for critique in final.get("critiques", []) or []
+                    for gap in (critique.get("gaps") or [])
+                ],
+                "quality_status": final.get("quality_status", "unverified"),
+                "quality_warnings": final.get("quality_warnings", []) or [],
+                "run_summary_path": final.get("run_summary_path", ""),
                 "iterations": final.get("current_iteration"),
                 "tool_calls": final.get("total_tool_calls"),
                 "heuristics": heur,
@@ -99,11 +117,18 @@ def _ragas_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _markdown_table(label: str, rows: list[dict[str, Any]]) -> str:
-    lines = [f"## {label}", "", "| id | category | iters | cites | pass_rate |", "|---|---|---|---|---|"]
+    lines = [
+        f"## {label}",
+        "",
+        "| id | category | iters | cites | claims | unsupported | quality | pass_rate |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
     for r in rows:
         lines.append(
             f"| {r.get('id', '?')} | {r.get('category', '?')} | "
             f"{r.get('iterations', '?')} | {len(r.get('citations') or [])} | "
+            f"{r.get('sourced_claims', 0)} | {r.get('unsupported_claims', 0)} | "
+            f"{r.get('quality_status', 'unknown')} | "
             f"{r.get('heuristics', {}).get('_summary', {}).get('pass_rate', 0):.2f} |"
         )
     return "\n".join(lines)

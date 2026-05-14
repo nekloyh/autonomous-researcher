@@ -17,19 +17,43 @@ class Claim(TypedDict):
     snippet: str               # ≤300 chars from the source supporting it
     confidence: float          # 0-1
 
+class SourceCandidate(TypedDict, total=False):
+    url: str
+    canonical_url: str
+    title: str
+    snippet: str
+    domain: str
+    rank_score: float
+    source_type: Literal["official", "reputable_media", "database", "generic", "unknown"]
+    assigned_task_ids: list[str]
+
+class ResearchGap(TypedDict, total=False):
+    question: str
+    origin_task_id: str
+    reason: str
+    priority: Literal["high", "medium", "low"]
+
 class Finding(TypedDict, total=False):
     task_id: str
+    sub_question: str
+    answer: str
     content: str               # Narrative summary (kept for backward compat)
     claims: list[Claim]        # Structured atomic facts (preferred)
     sources: list[str]         # URLs
+    gaps: list[str]
     confidence: float          # 0-1
+    source_quality: float      # 0-1
     tool_calls: int            # Số tool calls đã dùng
 
-class Critique(TypedDict):
+class Critique(TypedDict, total=False):
+    action: Literal["finalize", "research_gaps", "replan"]
     is_complete: bool
     quality_score: float       # 0-1
     missing_info: list[str]    # Dạng questions cần research thêm
+    gaps: list[ResearchGap]
     factual_errors: list[str]
+    unsupported_claims: list[str]
+    conflicting_claims: list[str]
     suggestions: list[str]
 
 # Main state
@@ -43,9 +67,11 @@ class AgentState(TypedDict):
     plan: list[SubTask]
     current_iteration: int
     max_iterations: int         # default = 3
+    gap_rounds: int
 
     # Execution
     findings: Annotated[list[Finding], add]  # Append-only
+    source_candidates: Annotated[list[SourceCandidate], add]
 
     # Synthesis
     draft_report: str
@@ -56,9 +82,12 @@ class AgentState(TypedDict):
     # Output
     final_report: str
     citations: list[str]
+    quality_status: Literal["verified", "unverified"]
+    quality_warnings: list[str]
+    run_summary_path: str
 
     # Meta
-    total_tool_calls: int
+    total_tool_calls: Annotated[int, add]
     total_tokens_used: Annotated[int, add]
     errors: Annotated[list[str], add]
 
@@ -67,3 +96,4 @@ class ResearcherState(TypedDict):
     task: SubTask
     user_query: str  # Original query for context
     session_id: str
+    assigned_sources: list[SourceCandidate]

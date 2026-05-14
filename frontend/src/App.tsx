@@ -1353,16 +1353,22 @@ export default function App() {
             // session_id available if needed
           } else if (ev.event === "update") {
             const u = ev.data;
-            if (u.node === "planner" || u.node === "replan") {
+            if (u.node === "planner" || u.node === "replan" || u.node === "gap_planner") {
               setIteration(u.iteration || 1);
               const placeholders: SubTask[] = Array.from({ length: u.plan_size }, (_, i) => ({
-                id: `task_${i + 1}`,
-                question: `Sub-task ${i + 1}`,
+                id: u.node === "gap_planner" ? `gap_${i + 1}` : `task_${i + 1}`,
+                question: u.node === "gap_planner" ? `Gap research ${i + 1}` : `Sub-task ${i + 1}`,
                 rationale: "",
                 dependencies: [],
               }));
               setTasks(placeholders);
               setTaskStatus(Object.fromEntries(placeholders.map((p) => [p.id, "pending" as TaskStatus])));
+              setStages((s) => ({
+                ...s,
+                planner: { status: "done", elapsed: elapsed(), tokens: null },
+                researchers: { status: "running", elapsed: 0, tokens: null },
+              }));
+            } else if (u.node === "source_broker") {
               setStages((s) => ({
                 ...s,
                 planner: { status: "done", elapsed: elapsed(), tokens: null },
@@ -1391,9 +1397,11 @@ export default function App() {
               }));
             } else if (u.node === "critic") {
               const c: Critique = {
+                action: u.action,
                 is_complete: u.is_complete,
                 quality_score: u.score,
-                missing_info: Array.from({ length: u.missing }, (_, i) => `Missing item ${i + 1}`),
+                missing_info: u.missing || [],
+                gaps: u.gaps || [],
                 suggestions: [],
                 threshold: 0.85,
               };

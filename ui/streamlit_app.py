@@ -33,11 +33,16 @@ def _initial_state(query: str, session_id: str) -> AgentState:
         "plan": [],
         "current_iteration": 0,
         "max_iterations": MAX_ITERATIONS,
+        "gap_rounds": 0,
         "findings": [],
+        "source_candidates": [],
         "draft_report": "",
         "critiques": [],
         "final_report": "",
         "citations": [],
+        "quality_status": "unverified",
+        "quality_warnings": [],
+        "run_summary_path": "",
         "total_tool_calls": 0,
         "total_tokens_used": 0,
         "errors": [],
@@ -59,7 +64,7 @@ async def _run(query: str, session_id: str, slots: dict[str, Any]):
         _initial_state(query, session_id), config=config, stream_mode="updates"
     ):
         for node, update in event.items():
-            if node in ("planner", "replan"):
+            if node in ("planner", "replan", "gap_planner"):
                 tasks = update.get("plan") or []
                 plan_lines = [
                     f"- **{t['id']}** — {t['question']}" for t in tasks
@@ -68,6 +73,14 @@ async def _run(query: str, session_id: str, slots: dict[str, Any]):
                     f"**Iteration {update.get('current_iteration')}**\n\n"
                     + "\n".join(plan_lines)
                 )
+            elif node == "source_broker":
+                sources = update.get("source_candidates") or []
+                lines = [
+                    f"- **{s.get('domain', 'unknown')}** — {s.get('title', '(untitled)')}  \n"
+                    f"  `{s.get('source_type', 'unknown')}` · score `{float(s.get('rank_score', 0)):.1f}`"
+                    for s in sources[:10]
+                ]
+                slots["researchers"].markdown("### Source candidates\n" + ("\n".join(lines) or "- none"))
             elif node == "researcher":
                 f = (update.get("findings") or [{}])[0]
                 findings_seen[f.get("task_id", "?")] = f
@@ -87,7 +100,7 @@ async def _run(query: str, session_id: str, slots: dict[str, Any]):
                 c = (update.get("critiques") or [{}])[-1]
                 critiques_md.append(
                     f"- iter {len(critiques_md) + 1}: score=**{c.get('quality_score', 0):.2f}** · "
-                    f"complete={c.get('is_complete')} · missing={len(c.get('missing_info') or [])}"
+                    f"action={c.get('action', 'unknown')} · missing={len(c.get('missing_info') or [])}"
                 )
                 slots["critic"].markdown("\n".join(critiques_md))
             elif node == "finalize":

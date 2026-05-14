@@ -73,6 +73,10 @@ class ResearchResponse(BaseModel):
     citations: list[str]
     iterations: int
     total_tool_calls: int
+    quality_status: str = "unverified"
+    quality_warnings: list[str] = Field(default_factory=list)
+    gaps: list[dict[str, Any]] = Field(default_factory=list)
+    run_summary_path: str = ""
 
 
 def _initial_state(query: str, session_id: str) -> AgentState:
@@ -83,11 +87,16 @@ def _initial_state(query: str, session_id: str) -> AgentState:
         "plan": [],
         "current_iteration": 0,
         "max_iterations": MAX_ITERATIONS,
+        "gap_rounds": 0,
         "findings": [],
+        "source_candidates": [],
         "draft_report": "",
         "critiques": [],
         "final_report": "",
         "citations": [],
+        "quality_status": "unverified",
+        "quality_warnings": [],
+        "run_summary_path": "",
         "total_tool_calls": 0,
         "total_tokens_used": 0,
         "errors": [],
@@ -123,12 +132,20 @@ async def research(request: Request, body: ResearchRequest):
         citations=final.get("citations", []) or [],
         iterations=final.get("current_iteration", 0),
         total_tool_calls=final.get("total_tool_calls", 0),
+        quality_status=final.get("quality_status", "unverified"),
+        quality_warnings=final.get("quality_warnings", []) or [],
+        gaps=[
+            gap
+            for critique in final.get("critiques", []) or []
+            for gap in (critique.get("gaps") or [])
+        ],
+        run_summary_path=final.get("run_summary_path", ""),
     )
 
 
 def _summarize(node: str, update: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {"node": node}
-    if node in ("planner", "replan"):
+    if node in ("planner", "replan", "gap_planner"):
         plan = update.get("plan") or []
         out["plan_size"] = len(plan)
         out["iteration"] = update.get("current_iteration")
@@ -137,11 +154,25 @@ def _summarize(node: str, update: dict[str, Any]) -> dict[str, Any]:
             for t in plan
         ]
         out["tokens"] = update.get("total_tokens_used") or 0
+    elif node == "source_broker":
+        sources = update.get("source_candidates") or []
+        out["source_candidates"] = [
+            {
+                "url": s.get("url"),
+                "title": s.get("title"),
+                "domain": s.get("domain"),
+                "source_type": s.get("source_type"),
+                "rank_score": s.get("rank_score"),
+                "assigned_task_ids": s.get("assigned_task_ids") or [],
+            }
+            for s in sources[:10]
+        ]
+        out["tool_calls"] = update.get("total_tool_calls") or 0
     elif node == "researcher":
         f = (update.get("findings") or [{}])[0]
         content = f.get("content") or ""
         out["task_id"] = f.get("task_id")
-        out["sources"] = f.get("sources") or []
+        out["sources"] = len(f.get("sources") or [])
         out["confidence"] = f.get("confidence")
         out["tool_calls"] = f.get("tool_calls")
         out["claims_count"] = len(f.get("claims") or [])
@@ -149,19 +180,24 @@ def _summarize(node: str, update: dict[str, Any]) -> dict[str, Any]:
         out["tokens"] = update.get("total_tokens_used") or 0
     elif node == "synthesizer":
         out["draft_words"] = len((update.get("draft_report") or "").split())
-        out["citations"] = update.get("citations") or []
+        out["citations"] = len(update.get("citations") or [])
         out["tokens"] = update.get("total_tokens_used") or 0
     elif node == "critic":
         c = (update.get("critiques") or [{}])[-1]
+        out["action"] = c.get("action")
         out["score"] = c.get("quality_score")
         out["is_complete"] = c.get("is_complete")
         out["missing"] = c.get("missing_info") or []
+        out["gaps"] = c.get("gaps") or []
         out["factual_errors"] = c.get("factual_errors") or []
         out["suggestions"] = c.get("suggestions") or []
         out["tokens"] = update.get("total_tokens_used") or 0
     elif node == "finalize":
         final = update.get("final_report") or ""
         out["final_words"] = len(final.split())
+        out["quality_status"] = update.get("quality_status")
+        out["quality_warnings"] = update.get("quality_warnings") or []
+        out["run_summary_path"] = update.get("run_summary_path", "")
     return out
 
 
@@ -193,6 +229,14 @@ async def research_stream(request: Request, body: ResearchRequest):
                         "session_id": session_id,
                         "final_report": final.get("final_report", ""),
                         "citations": final.get("citations", []) or [],
+                        "quality_status": final.get("quality_status", "unverified"),
+                        "quality_warnings": final.get("quality_warnings", []) or [],
+                        "gaps": [
+                            gap
+                            for critique in final.get("critiques", []) or []
+                            for gap in (critique.get("gaps") or [])
+                        ],
+                        "run_summary_path": final.get("run_summary_path", ""),
                     },
                     default=str,
                 ),

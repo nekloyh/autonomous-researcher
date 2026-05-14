@@ -5,9 +5,11 @@ from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.config import MAX_SUBTASKS, get_planner_llm, is_development
+from app.logger import log_event
 from app.observability import tokens_from_response
 from app.prompts import PLANNER_PROMPT
 from app.prompts.planner import PROMPT_VERSION
+from app.provider_rotation import invoke_with_rotation, rotate_groq
 from app.state import AgentState, SubTask
 
 
@@ -28,10 +30,18 @@ class ResearchPlan(BaseModel):
 
 @retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=8), reraise=True)
 def _invoke_planner(prompt: str) -> tuple[ResearchPlan, int]:
-    llm = get_planner_llm().with_structured_output(ResearchPlan, include_raw=True)
-    out = llm.invoke(
-        prompt,
-        config={"metadata": {"prompt_version": PROMPT_VERSION, "agent": "planner"}},
+    def _call():
+        llm = get_planner_llm().with_structured_output(ResearchPlan, include_raw=True)
+        return llm.invoke(
+            prompt,
+            config={"metadata": {"prompt_version": PROMPT_VERSION, "agent": "planner"}},
+        )
+
+    out = invoke_with_rotation(
+        "groq",
+        _call,
+        attempts=2,
+        rotate=rotate_groq,
     )
     if isinstance(out, dict):
         if out.get("parsing_error") and not out.get("parsed"):
@@ -50,17 +60,26 @@ def planner_node(state: AgentState) -> dict:
 
     if is_development():
         query = state["user_query"]
+        plan: list[SubTask] = [
+            {
+                "id": "task_1",
+                "question": f"Development-mode summary for: {query}",
+                "rationale": "Deterministic local stub; no external LLM calls.",
+                "dependencies": [],
+                "status": "pending",
+            }
+        ]
+        log_event(
+            "planner",
+            state.get("session_id", "-"),
+            iteration=iteration + 1,
+            subtasks=len(plan),
+            development=True,
+        )
         return {
-            "plan": [
-                {
-                    "id": "task_1",
-                    "question": f"Development-mode summary for: {query}",
-                    "rationale": "Deterministic local stub; no external LLM calls.",
-                    "dependencies": [],
-                    "status": "pending",
-                }
-            ],
+            "plan": plan,
             "current_iteration": iteration + 1,
+            "gap_rounds": 0,
         }
 
     previous_context = ""
@@ -106,8 +125,16 @@ def planner_node(state: AgentState) -> dict:
         for t in plan.tasks[:MAX_SUBTASKS]
     ]
 
+    log_event(
+        "planner",
+        state.get("session_id", "-"),
+        iteration=iteration + 1,
+        subtasks=len(subtasks),
+        development=False,
+    )
     return {
         "plan": subtasks,
         "current_iteration": iteration + 1,
+        "gap_rounds": 0,
         "total_tokens_used": tokens,
     }

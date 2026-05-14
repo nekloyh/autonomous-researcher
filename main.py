@@ -33,21 +33,32 @@ def _initial_state(query: str, session_id: str) -> AgentState:
         "plan": [],
         "current_iteration": 0,
         "max_iterations": MAX_ITERATIONS,
+        "gap_rounds": 0,
         "findings": [],
+        "source_candidates": [],
         "draft_report": "",
         "critiques": [],
         "final_report": "",
         "citations": [],
+        "quality_status": "unverified",
+        "quality_warnings": [],
+        "run_summary_path": "",
         "total_tool_calls": 0,
         "total_tokens_used": 0,
         "errors": [],
     }
 
 
-def _summarize_update(node: str, update: dict[str, Any]) -> str:
-    if node == "planner" or node == "replan":
+def _summarize_update(node: str, update: dict[str, Any] | None) -> str:
+    if not isinstance(update, dict):
+        return "no update"
+
+    if node in ("planner", "replan", "gap_planner"):
         plan = update.get("plan") or []
         return f"plan with {len(plan)} sub-tasks (iter {update.get('current_iteration', '?')})"
+    if node == "source_broker":
+        sources = update.get("source_candidates") or []
+        return f"selected {len(sources)} source candidates"
     if node == "researcher":
         findings = update.get("findings") or []
         if findings:
@@ -69,7 +80,10 @@ def _summarize_update(node: str, update: dict[str, Any]) -> str:
             )
     if node == "finalize":
         final = update.get("final_report") or ""
-        return f"final report = {len(final.split())} words"
+        return (
+            f"final report = {len(final.split())} words, "
+            f"quality={update.get('quality_status', 'unverified')}"
+        )
     return ", ".join(update.keys())
 
 
@@ -90,7 +104,8 @@ async def _run(query: str, session_id: str, stream: bool, use_memory: bool) -> d
         for node, update in event.items():
             if stream:
                 print(f"[{node}] {_summarize_update(node, update)}", flush=True)
-            last_state.update(update)
+            if isinstance(update, dict):
+                last_state.update(update)
 
     final = (await graph.aget_state(config)).values
     if use_memory and final.get("final_report"):

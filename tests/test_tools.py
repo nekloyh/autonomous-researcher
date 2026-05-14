@@ -71,7 +71,7 @@ def test_web_search_cache_ttl():
     ws._cache.clear()
     ws._cache["k"] = (_time.time() - ws._CACHE_TTL_SECONDS - 10, "stale")
 
-    with patch("app.tools.web_search.DDGS") as mock_ddgs:
+    with patch("app.tools.web_search.SEARCH_PROVIDER_ORDER", ["ddg"]), patch("app.tools.web_search.DDGS") as mock_ddgs:
         instance = MagicMock()
         instance.text.return_value = [
             {"title": "Fresh", "href": "https://fresh.example", "body": "..."}
@@ -89,7 +89,7 @@ def test_web_search_bypasses_cache_for_time_sensitive():
     ws._cache.clear()
     ws._cache["latest news"] = (9.9e12, "should-not-be-served")
 
-    with patch("app.tools.web_search.DDGS") as mock_ddgs:
+    with patch("app.tools.web_search.SEARCH_PROVIDER_ORDER", ["ddg"]), patch("app.tools.web_search.DDGS") as mock_ddgs:
         instance = MagicMock()
         instance.text.return_value = [
             {"title": "Live", "href": "https://live.example", "body": "..."}
@@ -97,6 +97,31 @@ def test_web_search_bypasses_cache_for_time_sensitive():
         mock_ddgs.return_value = instance
         out = ws.web_search.invoke({"query": "latest news"})
     assert "live.example" in out
+
+
+def test_web_search_ranks_company_sources_by_quality():
+    import sys
+
+    ws = sys.modules["app.tools.web_search"]
+    ws._cache.clear()
+
+    with patch("app.tools.web_search.SEARCH_PROVIDER_ORDER", ["ddg"]), patch("app.tools.web_search.DDGS") as mock_ddgs:
+        instance = MagicMock()
+        instance.text.return_value = [
+            {
+                "title": "Generic business model directory",
+                "href": "https://generic.example/momo-business-model",
+                "body": "A generic summary.",
+            },
+            {
+                "title": "MoMo official press release",
+                "href": "https://www.momo.vn/news/company-update",
+                "body": "MoMo official company update and press release.",
+            },
+        ]
+        mock_ddgs.return_value = instance
+        out = ws.web_search.invoke({"query": "MoMo business model"})
+    assert "[1] MoMo official press release" in out
 
 
 def test_fetch_url_redacts_injection():
@@ -122,7 +147,7 @@ def test_web_search_uses_tavily(mock_tavily):
             {"title": "Test", "url": "https://example.com", "content": "snippet"}
         ]
     }
-    with patch("app.tools.web_search.DDGS") as mock_ddgs:
+    with patch("app.tools.web_search.SEARCH_PROVIDER_ORDER", ["tavily", "ddg"]), patch("app.tools.web_search.DDGS") as mock_ddgs:
         mock_ddgs.side_effect = RuntimeError("ddg unavailable")
         out = web_search.invoke({"query": "anything unique 12345"})
     assert "example.com" in out
@@ -135,7 +160,7 @@ def test_web_search_falls_back_to_ddg(mock_tavily):
 
     _cache.clear()
     mock_tavily.search.side_effect = RuntimeError("rate limit")
-    with patch("app.tools.web_search.DDGS") as mock_ddgs:
+    with patch("app.tools.web_search.SEARCH_PROVIDER_ORDER", ["tavily", "ddg"]), patch("app.tools.web_search.DDGS") as mock_ddgs:
         instance = MagicMock()
         instance.text.return_value = [
             {"title": "Fallback", "href": "https://fb.example", "body": "..."}

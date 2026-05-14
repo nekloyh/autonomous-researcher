@@ -5,6 +5,7 @@ from app.agents.synthesizer import (
     _append_sources_section,
     _build_citation_map,
     _renumber_and_filter,
+    synthesizer_node,
 )
 
 
@@ -85,3 +86,68 @@ def test_sources_section_replaces_existing():
     out = _append_sources_section(body, cmap)
     assert "https://fake.example" not in out
     assert "https://real.example" in out
+
+
+def test_citation_map_ignores_sources_without_claims():
+    findings = [
+        {
+            "task_id": "t1",
+            "content": "Narrative-only finding with no sourced claims.",
+            "claims": [],
+            "sources": ["https://a.example"],
+            "confidence": 0.8,
+            "tool_calls": 1,
+        }
+    ]
+    assert _build_citation_map(findings) == {}
+
+
+def test_synthesizer_does_not_use_unsupported_narrative_claim(monkeypatch):
+    monkeypatch.setattr("app.agents.synthesizer.is_development", lambda: False)
+    state = {
+        "user_query": "MoMo user count",
+        "session_id": "test_unsupported_claim",
+        "findings": [
+            {
+                "task_id": "t1",
+                "content": "MoMo has 50 million users.",
+                "claims": [],
+                "sources": ["https://momo.example"],
+                "confidence": 0.8,
+                "tool_calls": 1,
+            }
+        ],
+    }
+    out = synthesizer_node(state)
+    assert out["citations"] == []
+    assert "50 million" not in out["draft_report"]
+    assert "not found in available sources" in out["draft_report"]
+
+
+def test_synthesizer_drops_unrelated_vng_claim_for_momo(monkeypatch):
+    monkeypatch.setattr("app.agents.synthesizer.is_development", lambda: False)
+    state = {
+        "user_query": "MoMo business model",
+        "session_id": "test_momo_vng",
+        "findings": [
+            {
+                "task_id": "t1",
+                "content": "VNG unrelated context.",
+                "claims": [
+                    {
+                        "statement": "VNG operates online games and digital services.",
+                        "source_url": "https://vng.com.vn/about",
+                        "snippet": "VNG operates online games and digital services.",
+                        "confidence": 0.9,
+                    }
+                ],
+                "sources": ["https://vng.com.vn/about"],
+                "confidence": 0.8,
+                "tool_calls": 1,
+            }
+        ],
+    }
+    out = synthesizer_node(state)
+    assert "MoMo is part of VNG" not in out["draft_report"]
+    assert "VNG operates" not in out["draft_report"]
+    assert out["citations"] == []

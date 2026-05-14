@@ -91,6 +91,14 @@ You'll also need:
   `app/config.py`.
 - API keys for Groq, Google AI Studio, Tavily.
 
+Production note: the hybrid `vector_search` reranker uses fastembed's
+`Xenova/ms-marco-MiniLM-L-6-v2` cross-encoder and downloads it on first use.
+Preload it during setup with:
+
+```bash
+uv run python -c "from fastembed.rerank.cross_encoder import TextCrossEncoder; TextCrossEncoder(model_name='Xenova/ms-marco-MiniLM-L-6-v2')"
+```
+
 ## Tech stack
 
 | Layer | Pick |
@@ -102,7 +110,7 @@ You'll also need:
 | Critic | Google `gemini-2.0-flash` (different model family by design) |
 | Embeddings | Ollama `nomic-embed-text` (local) — swap to HF for HF Spaces |
 | Vector store | Qdrant (Docker locally, Qdrant Cloud in prod) |
-| Search | DuckDuckGo (free, primary) → Tavily (fallback when DDG fails) |
+| Search | DDGS/DuckDuckGo (free, primary) → Tavily (fallback when DDG fails) |
 | Scraping | requests + BeautifulSoup + markdownify |
 | API | FastAPI + SSE (sse-starlette) + slowapi rate-limit |
 | UI | Streamlit + React (Vite + Tailwind) |
