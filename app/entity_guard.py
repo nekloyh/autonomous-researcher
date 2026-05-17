@@ -16,6 +16,8 @@ _ENTITY_ALIASES: dict[str, tuple[str, ...]] = {
     "tiki": ("tiki",),
 }
 
+_COMPARISON_RE = re.compile(r"\b(compare|versus|vs|difference|so sánh)\b", re.IGNORECASE)
+
 
 def _norm(text: str) -> str:
     return " ".join(_WORD_RE.findall((text or "").lower()))
@@ -51,19 +53,30 @@ def primary_entity(query: str) -> str | None:
     return sorted(positions)[0][1]
 
 
+def is_comparison_query(query: str) -> bool:
+    """True when the query explicitly compares two or more known entities."""
+    return len(entities_in_text(query)) >= 2 and bool(_COMPARISON_RE.search(query or ""))
+
+
 def is_entity_contaminated(query: str, text: str, source_url: str = "") -> bool:
     """True when evidence discusses another known entity without the query entity.
 
     Relation evidence is allowed when the evidence itself names both entities.
     For example, a MoMo query may use a VNG source only if the claim/snippet also
-    names MoMo.
+    names MoMo. For explicit comparison queries, evidence about any entity named
+    in the query is allowed; evidence about known entities outside the query is
+    still blocked.
     """
-    primary = primary_entity(query)
-    if not primary:
-        return False
-
     mentioned = entities_in_text(f"{text}\n{source_url}")
     if not mentioned:
+        return False
+
+    query_entities = entities_in_text(query)
+    if is_comparison_query(query):
+        return bool(mentioned - query_entities)
+
+    primary = primary_entity(query)
+    if not primary:
         return False
     if primary in mentioned:
         return False

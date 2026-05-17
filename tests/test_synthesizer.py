@@ -151,3 +151,114 @@ def test_synthesizer_drops_unrelated_vng_claim_for_momo(monkeypatch):
     assert "MoMo is part of VNG" not in out["draft_report"]
     assert "VNG operates" not in out["draft_report"]
     assert out["citations"] == []
+
+
+def test_synthesizer_keeps_each_entity_in_comparison_query(monkeypatch):
+    monkeypatch.setattr("app.agents.synthesizer.is_development", lambda: False)
+    state = {
+        "user_query": "MoMo vs ZaloPay vs VNPay market share",
+        "session_id": "test_comparison_entities",
+        "findings": [
+            {
+                "task_id": "t1",
+                "content": "",
+                "claims": [
+                    {
+                        "statement": "ZaloPay offers digital payment services.",
+                        "source_url": "https://zalopay.vn/about",
+                        "snippet": "ZaloPay offers digital payment services.",
+                        "confidence": 0.9,
+                    },
+                    {
+                        "statement": "VNPay offers merchant payment services.",
+                        "source_url": "https://vnpay.vn/about",
+                        "snippet": "VNPay offers merchant payment services.",
+                        "confidence": 0.9,
+                    },
+                ],
+                "sources": ["https://zalopay.vn/about", "https://vnpay.vn/about"],
+                "confidence": 0.8,
+                "tool_calls": 1,
+            }
+        ],
+    }
+
+    captured = {}
+
+    class FakeLLM:
+        def invoke(self, prompt, config=None):  # noqa: ARG002
+            captured["prompt"] = prompt
+
+            class Response:
+                content = "# Report\n\nZaloPay is covered [1]. VNPay is covered [2]."
+
+            return Response()
+
+    monkeypatch.setattr("app.agents.synthesizer.get_synthesizer_llm", lambda: FakeLLM())
+    out = synthesizer_node(state)
+
+    assert "ZaloPay offers digital payment services." in captured["prompt"]
+    assert "VNPay offers merchant payment services." in captured["prompt"]
+    assert out["citations"] == ["https://zalopay.vn/about", "https://vnpay.vn/about"]
+
+
+def test_synthesizer_uses_research_plan_coverage(monkeypatch):
+    monkeypatch.setattr("app.agents.synthesizer.is_development", lambda: False)
+    state = {
+        "user_query": "Compare VNG and FPT AI strategy in 2024",
+        "session_id": "test_plan_coverage",
+        "research_plan": {
+            "query_intent": "comparison",
+            "synthesis_requirements": ["Compare filled cells and disclose missing cells."],
+            "research_cells": [
+                {
+                    "id": "cell_fpt_partnerships",
+                    "entity": "FPT",
+                    "dimension": "partnerships",
+                    "question": "What AI partnerships did FPT announce in 2024?",
+                    "required_evidence": 2,
+                    "target_queries": ["FPT AI partnerships 2024"],
+                }
+            ],
+        },
+        "findings": [
+            {
+                "task_id": "task_1",
+                "cell_id": "cell_fpt_partnerships",
+                "content": "",
+                "claims": [
+                    {
+                        "statement": "FPT announced an AI partnership in 2024.",
+                        "source_url": "https://fpt.com/news",
+                        "snippet": "FPT announced an AI partnership in 2024.",
+                        "confidence": 0.9,
+                        "cell_id": "cell_fpt_partnerships",
+                        "entity": "FPT",
+                        "dimension": "partnerships",
+                        "validation_status": "valid",
+                    }
+                ],
+                "sources": ["https://fpt.com/news"],
+                "confidence": 0.8,
+                "tool_calls": 1,
+            }
+        ],
+    }
+    captured = {}
+
+    class FakeLLM:
+        def invoke(self, prompt, config=None):  # noqa: ARG002
+            captured["prompt"] = prompt
+
+            class Response:
+                content = "# Report\n\nFPT has one partnership claim [1]."
+
+            return Response()
+
+    monkeypatch.setattr("app.agents.synthesizer.get_synthesizer_llm", lambda: FakeLLM())
+    out = synthesizer_node(state)
+
+    assert "Research plan coverage" in captured["prompt"]
+    assert "Insufficient verified data after targeted research" in captured["prompt"]
+    assert "cell_fpt_partnerships" in captured["prompt"]
+    assert out["citations"] == ["https://fpt.com/news"]

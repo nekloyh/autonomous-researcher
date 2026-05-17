@@ -20,14 +20,18 @@ from app.agents import (
     synthesizer_node,
 )
 from app.config import MAX_GAP_ROUNDS, MAX_PARALLEL
-from app.entity_guard import entities_in_text, is_entity_contaminated
+from app.entity_guard import entities_in_text, is_comparison_query, is_entity_contaminated
 from app.evaluation.cost import estimate_cost_simple
+from app.gaps import dedupe_gaps
 from app.logger import log_event
+from app.research_plan import build_cell_coverage, gap_to_cell, underfilled_cells
+from app.source_policy import classify_policy_tier
 from app.state import AgentState
 
 MIN_FINAL_CITATIONS = 3
 MIN_SOURCED_CLAIMS = 3
-MIN_CRITIC_SCORE = 0.65
+MIN_VERIFIED_CRITIC_SCORE = 0.80
+MIN_PARTIAL_CRITIC_SCORE = 0.60
 OUTPUT_DIR = Path("outputs")
 
 
@@ -126,7 +130,7 @@ def replan_node(state: AgentState) -> dict:
 
 def _critique_gap_questions(critique: dict) -> list[str]:
     questions = []
-    for gap in critique.get("gaps") or []:
+    for gap in dedupe_gaps(critique.get("gaps") or []):
         question = (gap.get("question") or "").strip()
         if question:
             questions.append(question)
@@ -137,16 +141,100 @@ def _critique_gap_questions(critique: dict) -> list[str]:
     return questions
 
 
+def _quality_gate_gap_questions(state: AgentState, warnings: list[str]) -> list[str]:
+    """Translate deterministic gate warnings into researchable follow-up questions."""
+    query = state.get("user_query", "").strip() or "the original query"
+    questions: list[str] = []
+
+    needs_more_evidence = any(
+        w.startswith("only ") and ("citations found" in w or "sourced claims found" in w)
+        for w in warnings
+    )
+    if needs_more_evidence:
+        questions.append(
+            "Find additional authoritative source-backed claims that directly answer: "
+            f"{query}"
+        )
+
+    for warning in warnings:
+        prefix = "comparison query lacks sourced claims for entities: "
+        if warning.startswith(prefix):
+            missing = warning.removeprefix(prefix).strip()
+            questions.append(
+                "Find source-backed evidence for the missing comparison entities "
+                f"({missing}) in: {query}"
+            )
+        elif warning.startswith("critic score "):
+            questions.append(
+                "Find stronger source-backed evidence to address the critic feedback for: "
+                f"{query}"
+            )
+        elif warning.startswith("entity contamination detected"):
+            questions.append(
+                "Find clean source-backed evidence that clearly names the correct queried "
+                f"entity or entities for: {query}"
+            )
+
+    if not questions:
+        questions.append(f"Find additional authoritative evidence to resolve: {query}")
+
+    return list(dict.fromkeys(questions))
+
+
 def gap_planner_node(state: AgentState) -> dict:
     """Convert critic gaps into targeted temporary subtasks."""
     critiques = state.get("critiques", []) or []
     last = critiques[-1] if critiques else {}
+    research_plan = state.get("research_plan") or {}
+    critique_gaps = dedupe_gaps(last.get("gaps") or [])
+    cell_tasks: list[dict] = []
+    iteration = state.get("current_iteration", 0)
+    for gap in critique_gaps:
+        cell = gap_to_cell(gap, research_plan)
+        if not cell:
+            continue
+        question = gap.get("question") or cell.get("question")
+        cell_tasks.append(
+            {
+                "id": f"gap_{iteration}_{state.get('gap_rounds', 0) + 1}_{len(cell_tasks) + 1}",
+                "question": question,
+                "rationale": gap.get("reason", "Targeted follow-up from critic."),
+                "dependencies": [],
+                "status": "pending",
+                "cell_id": cell.get("id") or cell.get("cell_id") or "",
+                "entity": cell.get("entity", ""),
+                "dimension": cell.get("dimension", ""),
+                "target_queries": cell.get("target_queries") or [question],
+                "required_evidence": cell.get("required_evidence", 1),
+                "success_criteria": cell.get("success_criteria", []),
+                "allow_insufficient_data": cell.get("allow_insufficient_data", False),
+            }
+        )
+    if not cell_tasks and research_plan:
+        for cell in underfilled_cells(research_plan, state.get("findings", []))[:MAX_PARALLEL]:
+            question = cell.get("question") or f"Find evidence for {cell.get('entity')} {cell.get('dimension')}"
+            cell_tasks.append(
+                {
+                    "id": f"gap_{iteration}_{state.get('gap_rounds', 0) + 1}_{len(cell_tasks) + 1}",
+                    "question": question,
+                    "rationale": "Targeted follow-up for underfilled research cell.",
+                    "dependencies": [],
+                    "status": "pending",
+                    "cell_id": cell.get("id") or cell.get("cell_id") or "",
+                    "entity": cell.get("entity", ""),
+                    "dimension": cell.get("dimension", ""),
+                    "target_queries": cell.get("target_queries") or [question],
+                    "required_evidence": cell.get("required_evidence", 1),
+                    "success_criteria": cell.get("success_criteria", []),
+                    "allow_insufficient_data": cell.get("allow_insufficient_data", False),
+                }
+            )
     questions = _critique_gap_questions(last)
     if not questions:
-        questions = [str(w) for w in state.get("quality_warnings", []) or [] if str(w).strip()]
-    subtasks = []
-    iteration = state.get("current_iteration", 0)
-    for i, question in enumerate(questions[:MAX_PARALLEL], 1):
+        warnings = [str(w) for w in state.get("quality_warnings", []) or [] if str(w).strip()]
+        questions = _quality_gate_gap_questions(state, warnings)
+    subtasks = cell_tasks[:MAX_PARALLEL]
+    for i, question in enumerate(questions[:MAX_PARALLEL - len(subtasks)], len(subtasks) + 1):
         subtasks.append(
             {
                 "id": f"gap_{iteration}_{state.get('gap_rounds', 0) + 1}_{i}",
@@ -154,6 +242,13 @@ def gap_planner_node(state: AgentState) -> dict:
                 "rationale": "Targeted follow-up from critic or quality gate.",
                 "dependencies": [],
                 "status": "pending",
+                "cell_id": f"gap_cell_{iteration}_{i}",
+                "entity": "",
+                "dimension": "gap follow-up",
+                "target_queries": [question],
+                "required_evidence": 1,
+                "success_criteria": [question],
+                "allow_insufficient_data": False,
             }
         )
     log_event(
@@ -173,20 +268,22 @@ def quality_gate_node(state: AgentState) -> dict:
         "quality_warnings": quality["warnings"],
     }
     if should_continue(state) == "finish" and not quality["gate_passed"] and not quality["hard_stop"]:
+        gap_questions = _quality_gate_gap_questions(state, list(quality["warnings"]))
         update["critiques"] = [
             {
                 "action": "research_gaps",
                 "is_complete": False,
                 "quality_score": float(quality["critic_score"] or 0.0),
-                "missing_info": list(quality["warnings"]),
+                "missing_info": gap_questions,
                 "gaps": [
                     {
-                        "question": warning,
+                        "question": question,
                         "origin_task_id": "quality_gate",
-                        "reason": "Deterministic quality gate failure.",
+                        "reason": "Deterministic quality gate failure: "
+                        + "; ".join(quality["warnings"]),
                         "priority": "high",
                     }
-                    for warning in quality["warnings"]
+                    for question in gap_questions
                 ],
                 "factual_errors": list(quality["warnings"]),
                 "unsupported_claims": [],
@@ -211,18 +308,62 @@ def _sourced_claims(state: AgentState) -> list[dict]:
     claims: list[dict] = []
     for finding in state.get("findings", []) or []:
         for claim in finding.get("claims") or []:
-            if claim.get("source_url"):
+            if claim.get("source_url") and claim.get("validation_status", "valid") != "dropped":
                 claims.append(claim)
     return claims
 
 
+def _dropped_claims(state: AgentState) -> list[dict]:
+    dropped: list[dict] = []
+    for finding in state.get("findings", []) or []:
+        dropped.extend(finding.get("dropped_claims") or [])
+    return dropped
+
+
+def _researcher_critical_errors(state: AgentState) -> list[str]:
+    errors: list[str] = []
+    for finding in state.get("findings", []) or []:
+        if finding.get("researcher_error_status") == "unrecovered":
+            task_id = finding.get("task_id", "?")
+            question = finding.get("sub_question") or finding.get("content") or ""
+            errors.append(f"researcher[{task_id}] unrecovered: {question}")
+    return errors
+
+
+def _blocked_citations(state: AgentState) -> list[str]:
+    query = state.get("user_query", "")
+    blocked: list[str] = []
+    for url in state.get("citations", []) or []:
+        if classify_policy_tier(url, query=query) == "blocked":
+            blocked.append(url)
+    return blocked
+
+
+def _latest_critique(state: AgentState) -> dict:
+    critiques = state.get("critiques", []) or []
+    return critiques[-1] if critiques else {}
+
+
+def _is_critic_provider_failure(text: str) -> bool:
+    lower = str(text).lower()
+    return "critic" in lower and ("provider" in lower or "failure" in lower or "error" in lower)
+
+
 def _critic_provider_failures(state: AgentState) -> list[str]:
-    failures: list[str] = []
-    for err in state.get("errors", []) or []:
-        lower = str(err).lower()
-        if "critic" in lower and ("provider" in lower or "failure" in lower or "error" in lower):
-            failures.append(str(err))
-    return failures
+    return [str(err) for err in state.get("errors", []) or [] if _is_critic_provider_failure(str(err))]
+
+
+def _latest_critique_has_provider_failure(state: AgentState) -> bool:
+    critiques = state.get("critiques", []) or []
+    if not critiques:
+        return False
+    latest = critiques[-1]
+    fields = [
+        latest.get("reasoning", ""),
+        *(latest.get("factual_errors") or []),
+        *(latest.get("suggestions") or []),
+    ]
+    return any(_is_critic_provider_failure(str(item)) for item in fields)
 
 
 def _citation_numbers(report: str) -> set[int]:
@@ -242,6 +383,7 @@ def _evaluate_quality_gate(state: AgentState) -> dict:
     citations = state.get("citations", []) or []
     claims = _sourced_claims(state)
     critiques = state.get("critiques", []) or []
+    latest = _latest_critique(state)
     last_score = None
     if critiques:
         try:
@@ -251,6 +393,7 @@ def _evaluate_quality_gate(state: AgentState) -> dict:
 
     failures: list[str] = []
     warnings: list[str] = []
+    severe_failures: list[str] = []
     report_numbers = _citation_numbers(state.get("draft_report", ""))
     if report_numbers and citations:
         max_allowed = len(citations)
@@ -267,10 +410,68 @@ def _evaluate_quality_gate(state: AgentState) -> dict:
         )
     if last_score is None:
         failures.append("missing critic review")
-    elif last_score < MIN_CRITIC_SCORE:
+        severe_failures.append("missing critic review")
+    elif last_score < MIN_VERIFIED_CRITIC_SCORE:
         failures.append(
-            f"critic score {last_score:.2f} is below minimum {MIN_CRITIC_SCORE:.2f}"
+            f"critic score {last_score:.2f} is below verified minimum {MIN_VERIFIED_CRITIC_SCORE:.2f}"
         )
+    if hard_stop:
+        failures.append("hard stop reached before verification criteria passed")
+    if latest and not latest.get("is_complete", False):
+        failures.append("latest critic review did not mark the report complete")
+
+    unsupported = list(latest.get("unsupported_claims") or [])
+    factual_errors = list(latest.get("factual_errors") or [])
+    conflicts = list(latest.get("conflicting_claims") or [])
+    latest_gaps = dedupe_gaps(latest.get("gaps") or [])
+    high_priority_gaps = [
+        gap for gap in latest_gaps if str(gap.get("priority", "medium")).lower() == "high"
+    ]
+    if unsupported:
+        msg = f"{len(unsupported)} unsupported claims in latest critic review"
+        failures.append(msg)
+        severe_failures.append(msg)
+    if factual_errors:
+        msg = f"{len(factual_errors)} factual errors in latest critic review"
+        failures.append(msg)
+        severe_failures.append(msg)
+    if conflicts:
+        msg = f"{len(conflicts)} conflicting claims in latest critic review"
+        failures.append(msg)
+        severe_failures.append(msg)
+    if high_priority_gaps:
+        msg = f"{len(high_priority_gaps)} unresolved high-priority gaps"
+        failures.append(msg)
+        severe_failures.append(msg)
+
+    blocked_citations = _blocked_citations(state)
+    if blocked_citations:
+        msg = "blocked source citations present: " + ", ".join(blocked_citations[:5])
+        failures.append(msg)
+        severe_failures.append(msg)
+
+    dropped_claims = _dropped_claims(state)
+    year_drops = [
+        c
+        for c in dropped_claims
+        if any("year-bearing claim" in str(w) for w in (c.get("validation_warnings") or []))
+    ]
+    if year_drops:
+        msg = f"{len(year_drops)} year-mismatch claims were dropped by validation"
+        failures.append(msg)
+        severe_failures.append(msg)
+
+    critical_errors = _researcher_critical_errors(state)
+    if critical_errors:
+        msg = f"{len(critical_errors)} unrecovered researcher critical errors"
+        failures.append(msg)
+        severe_failures.append(msg)
+
+    plan_underfilled = underfilled_cells(state.get("research_plan", {}), state.get("findings", []))
+    if plan_underfilled:
+        msg = f"{len(plan_underfilled)} required research cells underfilled"
+        failures.append(msg)
+        severe_failures.append(msg)
 
     contaminated = [
         c.get("statement", "")[:80]
@@ -282,10 +483,12 @@ def _evaluate_quality_gate(state: AgentState) -> dict:
         )
     ]
     if contaminated:
-        failures.append(f"entity contamination detected in {len(contaminated)} sourced claims")
+        msg = f"entity contamination detected in {len(contaminated)} sourced claims"
+        failures.append(msg)
+        severe_failures.append(msg)
 
     query_entities = entities_in_text(state.get("user_query", ""))
-    if len(query_entities) >= 2 and re.search(r"\b(compare|versus|vs|difference|so sánh)\b", state.get("user_query", ""), re.I):
+    if is_comparison_query(state.get("user_query", "")):
         coverage = {entity: 0 for entity in query_entities}
         for c in claims:
             mentioned = entities_in_text(f"{c.get('statement', '')}\n{c.get('snippet', '')}\n{c.get('source_url', '')}")
@@ -293,26 +496,45 @@ def _evaluate_quality_gate(state: AgentState) -> dict:
                 coverage[entity] += 1
         missing_entities = [e for e, count in coverage.items() if count == 0]
         if missing_entities:
-            failures.append(
+            msg = (
                 "comparison query lacks sourced claims for entities: "
                 + ", ".join(sorted(missing_entities))
             )
+            failures.append(msg)
+            severe_failures.append(msg)
 
     provider_failures = _critic_provider_failures(state)
-    if provider_failures:
+    if provider_failures and _latest_critique_has_provider_failure(state):
         failures.append("critic/provider failure was recorded")
         warnings.extend(provider_failures)
+    elif provider_failures:
+        warnings.append("critic/provider failure recovered after a later successful review")
 
     warnings.extend(failures)
     gate_passed = not failures
+    partial_ok = (
+        not gate_passed
+        and last_score is not None
+        and last_score >= MIN_PARTIAL_CRITIC_SCORE
+        and len(citations) >= MIN_FINAL_CITATIONS
+        and len(claims) >= MIN_SOURCED_CLAIMS
+        and not severe_failures
+    )
+    status = "verified" if gate_passed else "partial" if partial_ok else "unverified"
     return {
         "gate_passed": gate_passed,
         "hard_stop": hard_stop,
-        "status": "verified" if gate_passed else "unverified",
+        "status": status,
         "warnings": list(dict.fromkeys(warnings)),
         "citations_count": len(citations),
         "sourced_claims_count": len(claims),
         "critic_score": last_score,
+        "unsupported_claims_count": len(unsupported),
+        "factual_errors_count": len(factual_errors),
+        "conflicting_claims_count": len(conflicts),
+        "high_priority_gaps_count": len(high_priority_gaps),
+        "researcher_critical_errors": critical_errors,
+        "underfilled_cells_count": len(plan_underfilled),
     }
 
 
@@ -325,18 +547,44 @@ def _write_run_summary(state: AgentState, final_report: str, quality: dict) -> s
     session_id = _safe_session_id(state.get("session_id", "session"))
     path = OUTPUT_DIR / f"{session_id}.json"
     claims = _sourced_claims(state)
+    dropped_claims = _dropped_claims(state)
+    unresolved_gaps = dedupe_gaps(
+        [
+            gap
+            for critique in state.get("critiques", []) or []
+            for gap in (critique.get("gaps") or [])
+        ]
+    )
     payload = {
         "query": state.get("user_query", ""),
         "plan": state.get("plan", []),
+        "research_plan": state.get("research_plan", {}),
+        "cell_coverage": build_cell_coverage(
+            state.get("research_plan", {}), state.get("findings", [])
+        ),
+        "underfilled_cells": underfilled_cells(
+            state.get("research_plan", {}), state.get("findings", [])
+        ),
         "findings": state.get("findings", []),
         "source_candidates": state.get("source_candidates", []) or [],
         "claims": claims,
         "citations": state.get("citations", []) or [],
         "critiques": state.get("critiques", []) or [],
-        "unresolved_gaps": [
-            gap
-            for critique in state.get("critiques", []) or []
-            for gap in (critique.get("gaps") or [])
+        "unresolved_gaps": unresolved_gaps,
+        "unique_unresolved_gaps": unresolved_gaps,
+        "dropped_claims": dropped_claims,
+        "source_policy_violations": [
+            url
+            for url in state.get("citations", []) or []
+            if classify_policy_tier(url, query=state.get("user_query", "")) == "blocked"
+        ],
+        "researcher_error_status": [
+            {
+                "task_id": f.get("task_id"),
+                "status": f.get("researcher_error_status", "none"),
+            }
+            for f in state.get("findings", []) or []
+            if f.get("researcher_error_status") and f.get("researcher_error_status") != "none"
         ],
         "errors": state.get("errors", []) or [],
         "final_quality_status": quality.get("status", "unverified"),
@@ -376,11 +624,12 @@ def finalize_node(state: AgentState) -> dict:
         f"tool_calls={tool_calls}{tokens_str}{cost_str}{duration}{quality_str}*"
     )
     draft = state.get("draft_report", "") or ""
-    if quality["status"] == "unverified":
+    if quality["status"] != "verified":
         warning_text = "; ".join(quality["warnings"]) or "quality gate did not pass"
+        label = "partially verified" if quality["status"] == "partial" else "unverified"
         draft = (
             draft.rstrip()
-            + "\n\n> **Verification warning:** This report is unverified. "
+            + f"\n\n> **Verification warning:** This report is {label}. "
             + warning_text
             + "\n"
         )

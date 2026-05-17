@@ -1,10 +1,8 @@
 import type { SSEEvent } from "@/types";
 
 // POST /research/stream returns text/event-stream.
-// The server's _summarize() (app/api/server.py) strips the full plan/findings/
-// critique payloads down to counts and IDs — see SSEUpdate in @/types. If the
-// UI needs rationale/excerpt/score breakdown for live runs, expand
-// _summarize() on the backend; the demo mode uses local mock data.
+// The server's _summarize() (app/api/server.py) strips full graph payloads into
+// compact live UI updates; see SSEUpdate in @/types.
 
 export interface StreamHandle {
   events: AsyncIterable<SSEEvent>;

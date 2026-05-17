@@ -16,8 +16,8 @@ from pathlib import Path
 from typing import Any
 
 from app.config import MAX_ITERATIONS, is_development
-from app.graph import get_graph
-from app.memory.checkpointer import get_checkpointer
+from app.graph import get_graph, reset_graph
+from app.memory.checkpointer import close_checkpointer, get_checkpointer
 from app.memory.long_term import SemanticMemory
 from app.state import AgentState
 
@@ -31,6 +31,8 @@ def _initial_state(query: str, session_id: str) -> AgentState:
         "session_id": session_id,
         "started_at": datetime.now(),
         "plan": [],
+        "research_plan": {},
+        "cell_coverage": [],
         "current_iteration": 0,
         "max_iterations": MAX_ITERATIONS,
         "gap_rounds": 0,
@@ -95,27 +97,33 @@ async def _run(query: str, session_id: str, stream: bool, use_memory: bool) -> d
             print(f"[memory] hit (similarity {cached['score']:.2f}, age {cached['age_days']}d)")
             return {"final_report": cached["final_report"], "citations": cached.get("citations", [])}
 
-    graph = get_graph(checkpointer=None if is_development() else get_checkpointer())
-    state = _initial_state(query, session_id)
-    config = {"configurable": {"thread_id": session_id}}
+    checkpointer = None if is_development() else get_checkpointer()
+    try:
+        graph = get_graph(checkpointer=checkpointer)
+        state = _initial_state(query, session_id)
+        config = {"configurable": {"thread_id": session_id}}
 
-    last_state: dict[str, Any] = {}
-    async for event in graph.astream(state, config=config, stream_mode="updates"):
-        for node, update in event.items():
-            if stream:
-                print(f"[{node}] {_summarize_update(node, update)}", flush=True)
-            if isinstance(update, dict):
-                last_state.update(update)
+        last_state: dict[str, Any] = {}
+        async for event in graph.astream(state, config=config, stream_mode="updates"):
+            for node, update in event.items():
+                if stream:
+                    print(f"[{node}] {_summarize_update(node, update)}", flush=True)
+                if isinstance(update, dict):
+                    last_state.update(update)
 
-    final = (await graph.aget_state(config)).values
-    if use_memory and final.get("final_report"):
-        SemanticMemory().store(
-            query=query,
-            final_report=final["final_report"],
-            session_id=session_id,
-            citations=final.get("citations", []),
-        )
-    return final
+        final = (await graph.aget_state(config)).values
+        if use_memory and final.get("final_report"):
+            SemanticMemory().store(
+                query=query,
+                final_report=final["final_report"],
+                session_id=session_id,
+                citations=final.get("citations", []),
+            )
+        return final
+    finally:
+        if checkpointer is not None:
+            await close_checkpointer()
+            reset_graph()
 
 
 def main() -> int:
@@ -151,7 +159,7 @@ def main() -> int:
 
     out_md = OUTPUTS / f"{session_id}.md"
     out_md.write_text(final, encoding="utf-8")
-    out_json = OUTPUTS / f"{session_id}.json"
+    out_json = OUTPUTS / f"{session_id}.cli.json"
     out_json.write_text(
         json.dumps(
             {

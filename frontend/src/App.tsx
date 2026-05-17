@@ -25,7 +25,6 @@ import {
   Settings,
   Share2,
   ShieldCheck,
-  Sparkles,
   BookOpen,
 } from "lucide-react";
 
@@ -46,17 +45,6 @@ import { RadarChart } from "@/components/RadarChart";
 import { ScoreGauge } from "@/components/ScoreGauge";
 
 import { streamResearch } from "@/api/research";
-import {
-  CITATIONS,
-  CRITIC_ITER1,
-  CRITIC_ITER2,
-  FINAL_REPORT,
-  FINDINGS_BASE,
-  FINDINGS_ITER2,
-  PRESETS,
-  SESSION_HISTORY,
-  TASKS_BASE,
-} from "@/demo-data";
 import { faviconUrl, fmt, truncate } from "@/lib/utils";
 import type {
   Citation,
@@ -68,6 +56,14 @@ import type {
   SubTask,
   TaskStatus,
 } from "@/types";
+
+const PRESETS = [
+  "So sánh chiến lược AI giữa VNG và FPT trong 2024",
+  "Phân tích thị trường EV Việt Nam 6 tháng đầu 2025",
+  "How does Anthropic's Constitutional AI compare to RLHF?",
+  "Tác động của Bitcoin halving 2024 đến thị trường",
+  "Compare Apple Vision Pro vs Meta Quest 3 ecosystem",
+];
 
 /* ============================================================================
  * Primitives
@@ -346,6 +342,7 @@ function ResearcherCard({
     );
   }
   const tools = finding.tools;
+  const sourceCount = finding.source_count ?? finding.sources.length;
   return (
     <article className="neu-sm p-4 flex flex-col gap-3 ar-fade">
       <div className="flex items-start justify-between gap-2">
@@ -369,10 +366,17 @@ function ResearcherCard({
           overflow: "hidden",
         }}
       >
-        {finding.excerpt ?? `${finding.sources.length} source${finding.sources.length === 1 ? "" : "s"} consulted. Detailed excerpt is not streamed by the SSE summary — open the report when ready.`}
+        {finding.excerpt ??
+          `${sourceCount} source${sourceCount === 1 ? "" : "s"} consulted. Detailed excerpt is not streamed by the SSE summary — open the report when ready.`}
       </p>
       <div className="r-soft pt-2.5 flex items-center justify-between gap-2 mt-auto">
-        <FaviconStack urls={finding.sources} />
+        {finding.sources.length > 0 ? (
+          <FaviconStack urls={finding.sources} />
+        ) : (
+          <span className="ar-mono ar-tab" style={{ fontSize: 10, color: "var(--ink-3)" }}>
+            {sourceCount} source{sourceCount === 1 ? "" : "s"}
+          </span>
+        )}
         {tools && (
           <div className="flex items-center gap-0.5">
             <ToolMark icon={Globe} name="Web search" count={tools.web_search} active={tools.web_search > 0} />
@@ -834,12 +838,10 @@ function ReportViewer({
 function Sidebar({
   collapsed,
   onToggle,
-  history,
   onSelectPreset,
 }: {
   collapsed: boolean;
   onToggle: () => void;
-  history: typeof SESSION_HISTORY;
   onSelectPreset: (p: string) => void;
 }) {
   return (
@@ -868,39 +870,6 @@ function Sidebar({
         <div className="flex-1 overflow-auto ar-scroll p-3 space-y-4">
           <div>
             <div className="ar-sans ar-sc px-1 mb-2" style={{ fontSize: 10, fontWeight: 700, color: "var(--ink-3)" }}>
-              Back issues
-            </div>
-            <div className="space-y-1.5">
-              {history.map((h) => (
-                <button key={h.id} className="w-full text-left neu-xs p-2.5 hover:translate-x-[1px] transition-transform">
-                  <div className="ar-headline line-clamp-2 leading-tight" style={{ fontSize: 13, color: "var(--ink)" }}>
-                    {h.query}
-                  </div>
-                  <div
-                    className="flex items-center justify-between mt-1.5 ar-sans ar-sc"
-                    style={{ fontSize: 9, color: "var(--ink-4)" }}
-                  >
-                    <span>{h.time}</span>
-                    <span className="flex items-center gap-1.5">
-                      iter {h.iters}
-                      <span
-                        className="ar-mono ar-tab px-1.5 py-0.5 rounded-sm"
-                        style={{
-                          background: h.score >= 0.85 ? "var(--ivy)" : h.score >= 0.75 ? "var(--gold)" : "var(--accent)",
-                          color: "#F5EBD9",
-                          fontWeight: 700,
-                        }}
-                      >
-                        {(h.score * 100).toFixed(0)}
-                      </span>
-                    </span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="r-thin pt-4">
-            <div className="ar-sans ar-sc px-1 mb-2" style={{ fontSize: 10, fontWeight: 700, color: "var(--ink-3)" }}>
               Suggested leads
             </div>
             <div className="space-y-1">
@@ -926,7 +895,7 @@ function Sidebar({
  * Idle view
  * ========================================================================== */
 
-function IdleView({ onSubmit, onPlayDemo }: { onSubmit: (q: string) => void; onPlayDemo: () => void }) {
+function IdleView({ onSubmit }: { onSubmit: (q: string) => void }) {
   const [query, setQuery] = useState("");
   const [advOpen, setAdvOpen] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -1038,13 +1007,6 @@ function IdleView({ onSubmit, onPlayDemo }: { onSubmit: (q: string) => void; onP
                     </div>
                   </DialogContent>
                 </Dialog>
-                <button
-                  onClick={onPlayDemo}
-                  className="neu-btn ar-sans ar-sc px-3 py-2 flex items-center gap-1.5"
-                  style={{ fontSize: 10, fontWeight: 700, color: "var(--ink-2)" }}
-                >
-                  <Sparkles className="w-3 h-3" strokeWidth={1.8} /> Play demo edition
-                </button>
               </div>
               <button
                 onClick={submit}
@@ -1156,7 +1118,6 @@ export default function App() {
   const [evening, setEvening] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
-  const [mode, setMode] = useState<"demo" | "live">("demo");
   const [query, setQuery] = useState("");
   const [stages, setStages] = useState<Record<StageKey, StageState>>(INITIAL_STAGES);
   const [tasks, setTasks] = useState<SubTask[]>([]);
@@ -1181,7 +1142,6 @@ export default function App() {
   const [expandedTask, setExpandedTask] = useState<string | null>(null);
   const [followUpOpen, setFollowUpOpen] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const timersRef = useRef<number[]>([]);
   const abortRef = useRef<(() => void) | null>(null);
   const startedAtRef = useRef<number>(0);
 
@@ -1194,8 +1154,6 @@ export default function App() {
   };
 
   const reset = useCallback(() => {
-    timersRef.current.forEach(clearTimeout);
-    timersRef.current = [];
     abortRef.current?.();
     abortRef.current = null;
     setPhase("idle");
@@ -1217,126 +1175,9 @@ export default function App() {
     setErrorMsg(null);
   }, []);
 
-  const T = (ms: number, fn: () => void) => {
-    const id = window.setTimeout(fn, ms);
-    timersRef.current.push(id);
-  };
-
-  const runDemo = useCallback(
-    (q?: string) => {
-      const sq = q || "So sánh chiến lược AI giữa VNG và FPT trong 2024";
-      reset();
-      setTimeout(() => {
-        setMode("demo");
-        setQuery(sq);
-        setPhase("running");
-
-        T(0, () => setStages((s) => ({ ...s, planner: { status: "running", elapsed: 0, tokens: 0 } })));
-        T(800, () => setStages((s) => ({ ...s, planner: { status: "running", elapsed: 800, tokens: 420 } })));
-        T(1500, () => {
-          setTasks(TASKS_BASE);
-          setTaskStatus({ t1: "pending", t2: "pending", t3: "pending", t4: "pending" });
-          setStages((s) => ({ ...s, planner: { status: "done", elapsed: 1500, tokens: 720 } }));
-        });
-
-        T(2500, () => {
-          setStages((s) => ({ ...s, researchers: { status: "running", elapsed: 0, tokens: 0 } }));
-          setTaskStatus((ts) => ({ ...ts, t1: "running", t3: "running" }));
-        });
-        T(3400, () => {
-          setFindings((f) => ({ ...f, t1: FINDINGS_BASE.t1 }));
-          setTaskStatus((ts) => ({ ...ts, t1: "done" }));
-        });
-        T(4300, () => {
-          setFindings((f) => ({ ...f, t3: FINDINGS_BASE.t3 }));
-          setTaskStatus((ts) => ({ ...ts, t3: "done" }));
-        });
-        T(5200, () => setTaskStatus((ts) => ({ ...ts, t2: "running", t4: "running" })));
-        T(6000, () => {
-          setFindings((f) => ({ ...f, t2: FINDINGS_BASE.t2 }));
-          setTaskStatus((ts) => ({ ...ts, t2: "done" }));
-        });
-        T(6700, () => {
-          setFindings((f) => ({ ...f, t4: FINDINGS_BASE.t4 }));
-          setTaskStatus((ts) => ({ ...ts, t4: "done" }));
-          setStages((s) => ({ ...s, researchers: { status: "done", elapsed: 4200, tokens: 4850 } }));
-        });
-
-        T(7400, () => {
-          setStages((s) => ({ ...s, synthesizer: { status: "running", elapsed: 0, tokens: 0 } }));
-          setSynthWords(0);
-          setSynthCites(0);
-        });
-        T(7800, () => {
-          setSynthWords(120);
-          setSynthCites(2);
-        });
-        T(8200, () => {
-          setSynthWords(310);
-          setSynthCites(4);
-        });
-        T(8400, () => {
-          setSynthWords(580);
-          setSynthCites(6);
-          setStages((s) => ({ ...s, synthesizer: { status: "done", elapsed: 1000, tokens: 2100 } }));
-        });
-
-        T(9400, () => setStages((s) => ({ ...s, critic: { status: "running", elapsed: 0, tokens: 0 } })));
-        T(10200, () => {
-          setCritic(CRITIC_ITER1);
-          setStages((s) => ({ ...s, critic: { status: "done", elapsed: 800, tokens: 940 } }));
-          setReplanFlag(true);
-        });
-
-        T(11400, () => {
-          setIteration(2);
-          setStages((s) => ({
-            ...s,
-            researchers: { status: "running", elapsed: 0, tokens: 4850 },
-            synthesizer: { status: "pending", elapsed: null, tokens: null },
-            critic: { status: "pending", elapsed: null, tokens: null },
-          }));
-          setTaskStatus((ts) => ({ ...ts, t4: "running" }));
-        });
-        T(12500, () => {
-          setFindings((f) => ({ ...f, t4: FINDINGS_ITER2.t4 }));
-          setTaskStatus((ts) => ({ ...ts, t4: "done" }));
-          setStages((s) => ({ ...s, researchers: { status: "done", elapsed: 1100, tokens: 6200 } }));
-        });
-
-        T(13200, () => {
-          setStages((s) => ({ ...s, synthesizer: { status: "running", elapsed: 0, tokens: 2100 } }));
-          setSynthWords(580);
-          setSynthCites(6);
-        });
-        T(13800, () => {
-          setSynthWords(612);
-          setSynthCites(8);
-        });
-        T(14200, () => setStages((s) => ({ ...s, synthesizer: { status: "done", elapsed: 1000, tokens: 3400 } })));
-
-        T(14800, () => setStages((s) => ({ ...s, critic: { status: "running", elapsed: 0, tokens: 940 } })));
-        T(15400, () => {
-          setCritic(CRITIC_ITER2);
-          setStages((s) => ({ ...s, critic: { status: "done", elapsed: 600, tokens: 1500 } }));
-          setReplanFlag(false);
-          setFinalReport(FINAL_REPORT);
-          setFinalCitations(CITATIONS);
-        });
-        T(15900, () => {
-          setPhase("done");
-          setPipelineCollapsed(true);
-          setExpandedStages({ planner: false, researchers: false, synthesizer: false, critic: false });
-        });
-      }, 50);
-    },
-    [reset]
-  );
-
   const runLive = useCallback(
     async (q: string) => {
       reset();
-      setMode("live");
       setQuery(q);
       setPhase("running");
       startedAtRef.current = Date.now();
@@ -1355,17 +1196,25 @@ export default function App() {
             const u = ev.data;
             if (u.node === "planner" || u.node === "replan" || u.node === "gap_planner") {
               setIteration(u.iteration || 1);
-              const placeholders: SubTask[] = Array.from({ length: u.plan_size }, (_, i) => ({
-                id: u.node === "gap_planner" ? `gap_${i + 1}` : `task_${i + 1}`,
-                question: u.node === "gap_planner" ? `Gap research ${i + 1}` : `Sub-task ${i + 1}`,
-                rationale: "",
-                dependencies: [],
-              }));
-              setTasks(placeholders);
-              setTaskStatus(Object.fromEntries(placeholders.map((p) => [p.id, "pending" as TaskStatus])));
+              const nextTasks: SubTask[] =
+                u.tasks && u.tasks.length > 0
+                  ? u.tasks.map((t) => ({
+                      id: t.id,
+                      question: t.question,
+                      rationale: t.rationale,
+                      dependencies: t.dependencies ?? [],
+                    }))
+                  : Array.from({ length: u.plan_size }, (_, i) => ({
+                      id: u.node === "gap_planner" ? `gap_${i + 1}` : `task_${i + 1}`,
+                      question: u.node === "gap_planner" ? `Gap research ${i + 1}` : `Sub-task ${i + 1}`,
+                      rationale: "",
+                      dependencies: [],
+                    }));
+              setTasks(nextTasks);
+              setTaskStatus(Object.fromEntries(nextTasks.map((p) => [p.id, "pending" as TaskStatus])));
               setStages((s) => ({
                 ...s,
-                planner: { status: "done", elapsed: elapsed(), tokens: null },
+                planner: { status: "done", elapsed: elapsed(), tokens: u.tokens ?? null },
                 researchers: { status: "running", elapsed: 0, tokens: null },
               }));
             } else if (u.node === "source_broker") {
@@ -1380,10 +1229,12 @@ export default function App() {
                 ...f,
                 [tid]: {
                   task_id: tid,
-                  content: "",
+                  content: u.excerpt || "",
+                  excerpt: u.excerpt,
                   confidence: u.confidence,
-                  tool_calls: 0,
-                  sources: Array.from({ length: u.sources }, () => "https://example.com"),
+                  tool_calls: u.tool_calls ?? 0,
+                  sources: [],
+                  source_count: u.sources,
                 },
               }));
               setTaskStatus((ts) => ({ ...ts, [tid]: "done" }));
@@ -1393,7 +1244,7 @@ export default function App() {
               setStages((s) => ({
                 ...s,
                 researchers: { ...s.researchers, status: "done" },
-                synthesizer: { status: "done", elapsed: elapsed(), tokens: null },
+                synthesizer: { status: "done", elapsed: elapsed(), tokens: u.tokens ?? null },
               }));
             } else if (u.node === "critic") {
               const c: Critique = {
@@ -1407,7 +1258,7 @@ export default function App() {
               };
               setCritic(c);
               setReplanFlag(!u.is_complete);
-              setStages((s) => ({ ...s, critic: { status: "done", elapsed: elapsed(), tokens: null } }));
+              setStages((s) => ({ ...s, critic: { status: "done", elapsed: elapsed(), tokens: u.tokens ?? null } }));
             } else if (u.node === "finalize") {
               // handled in done event
             }
@@ -1443,8 +1294,7 @@ export default function App() {
   );
 
   const handleRerun = () => {
-    if (mode === "demo") runDemo(query);
-    else runLive(query);
+    runLive(query);
   };
 
   const totalElapsed = useMemo(
@@ -1456,9 +1306,9 @@ export default function App() {
     [stages]
   );
 
-  const displayCitations = finalCitations.length > 0 ? finalCitations : mode === "demo" ? CITATIONS : [];
-  const displayReport = finalReport || (mode === "demo" ? FINAL_REPORT : "");
-  const displayTasks = tasks.length > 0 ? tasks : mode === "demo" ? TASKS_BASE : [];
+  const displayCitations = finalCitations;
+  const displayReport = finalReport;
+  const displayTasks = tasks;
 
   return (
     <TooltipProvider delayDuration={150}>
@@ -1546,12 +1396,11 @@ export default function App() {
           <Sidebar
             collapsed={sidebarCollapsed}
             onToggle={() => setSidebarCollapsed((c) => !c)}
-            history={SESSION_HISTORY}
             onSelectPreset={(p) => setQuery(p)}
           />
 
           <main className="flex-1 overflow-hidden flex">
-            {phase === "idle" && <IdleView onSubmit={handleSubmit} onPlayDemo={() => runDemo()} />}
+            {phase === "idle" && <IdleView onSubmit={handleSubmit} />}
 
             {phase !== "idle" && (
               <div className="flex-1 flex overflow-hidden">
@@ -1563,7 +1412,7 @@ export default function App() {
                 >
                   <div className="px-5 py-4" style={{ borderBottom: "1px solid var(--rule-soft)" }}>
                     <div className="ar-sans ar-sc mb-1" style={{ fontSize: 10, color: "var(--ink-3)" }}>
-                      Today's inquiry {mode === "demo" && <span style={{ color: "var(--gold)" }}>· demo</span>}
+                      Today's inquiry
                     </div>
                     <div className="ar-headline" style={{ fontSize: "1rem", lineHeight: 1.3, color: "var(--ink)" }}>
                       {query}
@@ -1746,30 +1595,36 @@ export default function App() {
                         <div className="ar-sans ar-sc mb-2" style={{ fontSize: 10, color: "var(--ink-3)" }}>
                           Sources consulted
                         </div>
-                        <ul className="space-y-2">
-                          {f.sources.map((s, i) => (
-                            <li
-                              key={i}
-                              className="flex items-center gap-2 ar-mono"
-                              style={{ fontSize: 11, color: "var(--ink-2)" }}
-                            >
-                              <img src={faviconUrl(s)} alt="" className="w-3.5 h-3.5" />
-                              <a
-                                href={s}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="truncate"
-                                style={{
-                                  color: "var(--accent)",
-                                  textDecoration: "underline",
-                                  textDecorationColor: "var(--rule)",
-                                }}
+                        {f.sources.length > 0 ? (
+                          <ul className="space-y-2">
+                            {f.sources.map((s, i) => (
+                              <li
+                                key={i}
+                                className="flex items-center gap-2 ar-mono"
+                                style={{ fontSize: 11, color: "var(--ink-2)" }}
                               >
-                                {truncate(s, 60)}
-                              </a>
-                            </li>
-                          ))}
-                        </ul>
+                                <img src={faviconUrl(s)} alt="" className="w-3.5 h-3.5" />
+                                <a
+                                  href={s}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="truncate"
+                                  style={{
+                                    color: "var(--accent)",
+                                    textDecoration: "underline",
+                                    textDecorationColor: "var(--rule)",
+                                  }}
+                                >
+                                  {truncate(s, 60)}
+                                </a>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <div className="ar-serif" style={{ fontSize: 13, color: "var(--ink-3)" }}>
+                            {f.source_count ?? 0} source{(f.source_count ?? 0) === 1 ? "" : "s"} consulted. Source URLs are available in the final report citations.
+                          </div>
+                        )}
                       </div>
                     </div>
                   </>

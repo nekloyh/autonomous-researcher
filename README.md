@@ -1,14 +1,3 @@
----
-title: Autonomous Researcher
-emoji: 🔬
-colorFrom: indigo
-colorTo: purple
-sdk: streamlit
-sdk_version: "1.40.0"
-app_file: app.py
-pinned: false
----
-
 # Autonomous Researcher
 
 Multi-agent deep-research system. Decomposes a question into independent
@@ -78,11 +67,11 @@ uv run python scripts/ingest_corpus.py
 # 4. Run a query (CLI)
 uv run python main.py --query "Compare AI strategies of VNG and FPT in 2024" --stream
 
-# 5. Or run the Streamlit UI
-uv run streamlit run ui/streamlit_app.py
-
-# 6. Or run the FastAPI server
+# 5. Or run the FastAPI server
 uv run uvicorn app.api.server:app --reload --port 8000
+
+# 6. Or run the React frontend
+cd frontend && npm install && npm run dev
 ```
 
 You'll also need:
@@ -90,6 +79,8 @@ You'll also need:
   `ollama pull nomic-embed-text`). Skip this if you swap embeddings via
   `app/config.py`.
 - API keys for Groq, Google AI Studio, Tavily.
+- For Docker Compose, `DOCKER_OLLAMA_HOST` defaults to
+  `http://host.docker.internal:11434`; native local runs use `OLLAMA_HOST`.
 
 Production note: the hybrid `vector_search` reranker uses fastembed's
 `Xenova/ms-marco-MiniLM-L-6-v2` cross-encoder and downloads it on first use.
@@ -113,7 +104,7 @@ uv run python -c "from fastembed.rerank.cross_encoder import TextCrossEncoder; T
 | Search | DDGS/DuckDuckGo (free, primary) → Tavily (fallback when DDG fails) |
 | Scraping | requests + BeautifulSoup + markdownify |
 | API | FastAPI + SSE (sse-starlette) + slowapi rate-limit |
-| UI | Streamlit + React (Vite + Tailwind) |
+| UI | React (Vite + Tailwind) |
 | Observability | LangSmith (auto-traced when configured) |
 | Eval | RAGAS (faithfulness, relevancy, precision, recall) + heuristic checks |
 
@@ -130,14 +121,14 @@ app/
 ├── config.py      LLM factories + env config
 ├── graph.py       LangGraph orchestration
 └── state.py       AgentState + reducers
-ui/streamlit_app.py
 main.py            CLI entry
+frontend/          React application
 scripts/
 ├── ingest_corpus.py   Qdrant corpus ingestion
 ├── run_eval.py        Eval orchestrator (--ab for critic on/off)
 └── test_setup.py      Smoke test for all 6 services
 corpus/            seed .md docs
-tests/             pytest suite (29 tests)
+tests/             pytest suite
 ```
 
 ## Running the eval harness
@@ -153,20 +144,6 @@ uv run python scripts/run_eval.py --ab
 Outputs land in `evaluation_outputs/eval_<timestamp>.{json,md}` with per-query
 heuristic scores and aggregate RAGAS metrics. Targets: faithfulness ≥ 0.85,
 answer relevancy ≥ 0.90, ≥ +15% improvement from the critic loop.
-
-## Deploying to HuggingFace Spaces
-
-1. The repo root is already configured (`app.py`, HF metadata in this README).
-2. Generate a Spaces-friendly requirements file:
-   `uv export --no-dev --extra ui --format requirements-txt > requirements.txt`
-3. Set Space secrets: `GROQ_API_KEY`, `GOOGLE_API_KEY`, `TAVILY_API_KEY`,
-   `HF_SPACES=1`, and (optional) `QDRANT_URL` + `QDRANT_API_KEY` if you want
-   the corpus tool to work.
-4. `HF_SPACES=1` swaps embeddings from Ollama → `sentence-transformers/all-MiniLM-L6-v2`
-   automatically (Ollama isn't available on Spaces). Code in `app/config.get_embeddings()`.
-5. If you don't set Qdrant, the agent just falls back to the other 3 tools —
-   `vector_search` returns a friendly "no corpus" message.
-6. Push to the HF git remote — auto-build takes ~3-5 minutes.
 
 ## Patterns worth pointing out
 
@@ -233,11 +210,8 @@ critic-off vs critic-on configs, side-by-side.
 ```bash
 uv run ruff check app/ tests/
 uv run pytest -v
+cd frontend && npm run typecheck && npm run build
 ```
-
-Current: **49 passing** (graph routing, sandbox, injection redaction, web
-cache TTL, hybrid retrieval + RRF, synthesizer citation map, heuristics
-including offline faithfulness, API).
 
 ## What I'd do next
 

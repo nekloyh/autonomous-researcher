@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from app.api.server import app
+from app.api.server import _summarize, app
 
 
 def test_health_endpoint():
@@ -37,3 +37,52 @@ def test_research_endpoint_returns_report():
         assert body["final_report"].startswith("# Test")
         assert body["citations"] == ["https://x"]
         assert body["iterations"] == 1
+
+
+def test_stream_summary_includes_live_ui_fields():
+    planner = _summarize(
+        "planner",
+        {
+            "plan": [
+                {
+                    "id": "task_1",
+                    "question": "Find X",
+                    "rationale": "Needed",
+                    "dependencies": ["task_0"],
+                }
+            ],
+            "current_iteration": 2,
+            "total_tokens_used": 123,
+        },
+    )
+    assert planner["tasks"] == [
+        {
+            "id": "task_1",
+            "question": "Find X",
+            "rationale": "Needed",
+            "dependencies": ["task_0"],
+        }
+    ]
+    assert planner["tokens"] == 123
+
+    researcher = _summarize(
+        "researcher",
+        {
+            "findings": [
+                {
+                    "task_id": "task_1",
+                    "content": "A sourced finding.",
+                    "sources": ["https://example.com"],
+                    "claims": [{"statement": "x"}],
+                    "confidence": 0.8,
+                    "tool_calls": 3,
+                }
+            ],
+            "total_tokens_used": 456,
+        },
+    )
+    assert researcher["task_id"] == "task_1"
+    assert researcher["excerpt"] == "A sourced finding."
+    assert researcher["tool_calls"] == 3
+    assert researcher["claims_count"] == 1
+    assert researcher["tokens"] == 456

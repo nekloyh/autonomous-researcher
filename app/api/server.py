@@ -85,6 +85,8 @@ def _initial_state(query: str, session_id: str) -> AgentState:
         "session_id": session_id,
         "started_at": datetime.now(),
         "plan": [],
+        "research_plan": {},
+        "cell_coverage": [],
         "current_iteration": 0,
         "max_iterations": MAX_ITERATIONS,
         "gap_rounds": 0,
@@ -150,7 +152,12 @@ def _summarize(node: str, update: dict[str, Any]) -> dict[str, Any]:
         out["plan_size"] = len(plan)
         out["iteration"] = update.get("current_iteration")
         out["tasks"] = [
-            {"id": t.get("id"), "question": t.get("question"), "rationale": t.get("rationale")}
+            {
+                "id": t.get("id"),
+                "question": t.get("question"),
+                "rationale": t.get("rationale"),
+                "dependencies": t.get("dependencies") or [],
+            }
             for t in plan
         ]
         out["tokens"] = update.get("total_tokens_used") or 0
@@ -162,8 +169,11 @@ def _summarize(node: str, update: dict[str, Any]) -> dict[str, Any]:
                 "title": s.get("title"),
                 "domain": s.get("domain"),
                 "source_type": s.get("source_type"),
+                "source_policy_tier": s.get("source_policy_tier"),
+                "year_status": s.get("year_status"),
                 "rank_score": s.get("rank_score"),
                 "assigned_task_ids": s.get("assigned_task_ids") or [],
+                "assigned_cell_ids": s.get("assigned_cell_ids") or [],
             }
             for s in sources[:10]
         ]

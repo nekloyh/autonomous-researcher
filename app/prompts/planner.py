@@ -17,21 +17,30 @@ independent, focused sub-tasks that specialist researchers can investigate in pa
 {known_context}
 
 # Your Task
-Generate a research plan with the following structure.
+Generate ONE structured research plan for the query. Do not use a hardcoded
+template. Infer the user's intent and derive dimensions from the query itself.
+For example, an AI strategy query needs strategy dimensions; a stock-performance
+query needs stock/market dimensions.
 
 ## Thinking Process
 1. **Identify dimensions**: What aspects does this query cover? (temporal, entities,
    metrics, comparisons, etc.)
-2. **Atomize**: Break each dimension into specific, answerable questions.
+2. **Atomize**: Break each dimension into specific evidence cells.
 3. **Dependency check**: Does any task need another's output as input?
 4. **Parallelizability**: Maximize independent tasks for concurrent execution.
 
 ## Constraints
-- **Maximum {max_tasks} sub-tasks**. Quality over quantity.
-- Each sub-task must be answerable in 3-5 tool calls.
-- Each sub-task must be **specific** (include entities, timeframes, metrics).
+- **Maximum {max_tasks} executable research cells**. Quality over quantity.
+- Each cell must be answerable in 3-5 tool calls.
+- Each cell must be **specific** (include entities, timeframes, metrics).
 - Avoid redundancy: no two tasks should cover the same ground.
 - Dependencies are rare; use ONLY when truly necessary.
+- `required_evidence` is variable:
+  - numerical/financial facts can be satisfied by one precise authoritative claim;
+  - partnerships/products/infrastructure usually need 2-3 validated claims;
+  - use higher requirements only when needed by the query.
+- Include targeted search queries for each cell. These should be concrete enough
+  for SourceBroker and ReAct fallback to use directly.
 
 ## Good sub-task examples
 - "What was VNG Corporation's revenue in Q3 2024?"
@@ -47,6 +56,13 @@ Generate a research plan with the following structure.
 # Output Format
 Return a ResearchPlan with:
 - reasoning: 1-2 sentences on your decomposition strategy.
-- tasks: list of SubTaskPlan items, each with id ("task_1", "task_2", ...),
-  question, rationale, and dependencies (list of other task ids; usually empty).
+- query_intent: comparison | analysis | factual | numerical | exploratory | multi_hop
+- entities: entities explicitly or implicitly required by the query.
+- research_dimensions: dimensions derived from the query, not generic defaults.
+- research_cells: executable cells with id, entity, dimension, question,
+  target_queries, required_evidence, success_criteria, evidence_type, and
+  allow_insufficient_data.
+- synthesis_requirements: what the final answer must contain.
+- tasks: optional backward-compatible tasks only if research_cells cannot express
+  the plan; otherwise leave it empty.
 """

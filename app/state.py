@@ -10,12 +10,33 @@ class SubTask(TypedDict):
     rationale: str             # Tại sao task này cần thiết
     dependencies: list[str]    # IDs của tasks cần chạy trước
     status: Literal["pending", "running", "done", "failed"]
+    cell_id: str
+    entity: str
+    dimension: str
+    target_queries: list[str]
+    required_evidence: int
+    success_criteria: list[str]
+    allow_insufficient_data: bool
 
 class Claim(TypedDict):
     statement: str             # Atomic factual claim (1 sentence)
     source_url: str            # URL backing this claim
     snippet: str               # ≤300 chars from the source supporting it
     confidence: float          # 0-1
+    source_domain: str
+    source_type: str
+    source_policy_tier: Literal["blocked", "preferred", "allowed"]
+    evidence_years: list[str]
+    raw_snippet: str
+    attributed_entities: list[str]
+    validation_status: Literal["valid", "low_confidence", "dropped"]
+    validation_warnings: list[str]
+    cell_id: str
+    entity: str
+    dimension: str
+    evidence_type: str
+    document_section: str
+    page_or_chunk: str
 
 class SourceCandidate(TypedDict, total=False):
     url: str
@@ -25,7 +46,10 @@ class SourceCandidate(TypedDict, total=False):
     domain: str
     rank_score: float
     source_type: Literal["official", "reputable_media", "database", "generic", "unknown"]
+    source_policy_tier: Literal["blocked", "preferred", "allowed"]
+    year_status: Literal["matched", "unknown", "mismatch"]
     assigned_task_ids: list[str]
+    assigned_cell_ids: list[str]
 
 class ResearchGap(TypedDict, total=False):
     question: str
@@ -44,6 +68,12 @@ class Finding(TypedDict, total=False):
     confidence: float          # 0-1
     source_quality: float      # 0-1
     tool_calls: int            # Số tool calls đã dùng
+    dropped_claims: list[Claim]
+    validation_gaps: list[ResearchGap]
+    researcher_error_status: Literal["none", "recovered", "unrecovered"]
+    cell_id: str
+    entity: str
+    dimension: str
 
 class Critique(TypedDict, total=False):
     action: Literal["finalize", "research_gaps", "replan"]
@@ -65,6 +95,8 @@ class AgentState(TypedDict):
 
     # Planning
     plan: list[SubTask]
+    research_plan: dict
+    cell_coverage: list[dict]
     current_iteration: int
     max_iterations: int         # default = 3
     gap_rounds: int
@@ -82,7 +114,7 @@ class AgentState(TypedDict):
     # Output
     final_report: str
     citations: list[str]
-    quality_status: Literal["verified", "unverified"]
+    quality_status: Literal["verified", "partial", "unverified"]
     quality_warnings: list[str]
     run_summary_path: str
 

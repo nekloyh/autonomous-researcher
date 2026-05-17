@@ -18,28 +18,14 @@ services:
     environment:
       APP_MODE: ${APP_MODE:-production}
       QDRANT_URL: http://qdrant:6333
-      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      OLLAMA_HOST: ${DOCKER_OLLAMA_HOST:-http://host.docker.internal:11434}
     depends_on:
       - qdrant
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./.checkpoints.db:/app/.checkpoints.db
       - ./outputs:/app/outputs
-    restart: unless-stopped
-
-  ui:
-    build:
-      context: .
-      dockerfile: Dockerfile.ui
-    ports:
-      - "8501:8501"
-    env_file: .env
-    environment:
-      APP_MODE: ${APP_MODE:-production}
-      QDRANT_URL: http://qdrant:6333
-      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
-      API_URL: http://api:8000
-    depends_on:
-      - api
     restart: unless-stopped
 
   frontend:

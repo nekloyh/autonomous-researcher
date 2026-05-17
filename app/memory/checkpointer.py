@@ -27,6 +27,15 @@ def get_checkpointer() -> AsyncSqliteSaver:
     return _saver
 
 
+async def close_checkpointer() -> None:
+    """Close the process-wide async SQLite checkpointer, if one was opened."""
+    global _saver
+    saver = _saver
+    _saver = None
+    if saver is not None:
+        await saver.conn.close()
+
+
 def cleanup_old_threads(days: int = 7) -> int:
     """Purge checkpoint rows older than `days`. Returns count removed.
 

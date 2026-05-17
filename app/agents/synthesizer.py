@@ -10,15 +10,24 @@ from __future__ import annotations
 import re
 
 from app.config import get_synthesizer_llm, is_development
-from app.entity_guard import is_entity_contaminated
+from app.entity_guard import entities_in_text, is_comparison_query, is_entity_contaminated
 from app.logger import log_event
 from app.observability import tokens_from_response
 from app.prompts import SYNTHESIZER_PROMPT
 from app.prompts.synthesizer import PROMPT_VERSION
 from app.provider_rotation import invoke_with_rotation, rotate_groq
+from app.research_plan import build_cell_coverage
+from app.source_policy import classify_policy_tier
 from app.state import AgentState
 
 _CITE_RE = re.compile(r"\[(\d+)\]")
+_COVERAGE_DIMENSIONS: dict[str, tuple[str, ...]] = {
+    "products/services": ("product", "service", "solution", "launch", "announce"),
+    "partnerships": ("partner", "partnership", "collaboration", "alliance"),
+    "infrastructure/investment": ("infrastructure", "investment", "cloud", "data center", "gpu"),
+    "market/customers": ("market", "customer", "user", "mau", "adoption"),
+    "financial impact": ("revenue", "profit", "loss", "financial", "growth"),
+}
 
 
 def _build_citation_map(findings: list[dict]) -> dict[str, int]:
@@ -59,7 +68,15 @@ def _format_findings_for_prompt(findings: list[dict], cmap: dict[str, int]) -> s
                 continue
             stmt = c.get("statement", "").strip()
             snip = (c.get("snippet") or "").strip()[:200]
-            claim_lines.append(f"  - [{n}] {stmt}  (snippet: \"{snip}\")")
+            meta = []
+            if c.get("cell_id"):
+                meta.append(f"cell={c.get('cell_id')}")
+            if c.get("entity"):
+                meta.append(f"entity={c.get('entity')}")
+            if c.get("dimension"):
+                meta.append(f"dimension={c.get('dimension')}")
+            meta_text = f" ({'; '.join(meta)})" if meta else ""
+            claim_lines.append(f"  - [{n}] {stmt}{meta_text}  (snippet: \"{snip}\")")
         claims_block = "\n".join(claim_lines) if claim_lines else "  (no structured claims)"
         gaps_block = "\n".join(f"  - {g}" for g in gaps) if gaps else "  (none)"
         chunks.append(f"{header}\nClaims:\n{claims_block}\nKnown gaps:\n{gaps_block}")
@@ -73,6 +90,8 @@ def _filter_findings_for_synthesis(findings: list[dict], query: str) -> tuple[li
         "dropped_unsourced": 0,
         "dropped_entity_contamination": 0,
         "dropped_duplicate_claims": 0,
+        "dropped_blocked_source": 0,
+        "dropped_invalid_validation": 0,
     }
     filtered: list[dict] = []
     seen_claims: set[tuple[str, str]] = set()
@@ -85,6 +104,16 @@ def _filter_findings_for_synthesis(findings: list[dict], query: str) -> tuple[li
             snippet = (claim.get("snippet") or "").strip()
             if not url or not stmt:
                 stats["dropped_unsourced"] += 1
+                continue
+            if claim.get("validation_status", "valid") == "dropped":
+                stats["dropped_invalid_validation"] += 1
+                continue
+            if claim.get("source_policy_tier") == "blocked" or classify_policy_tier(
+                url,
+                snippet=snippet,
+                query=query,
+            ) == "blocked":
+                stats["dropped_blocked_source"] += 1
                 continue
             if is_entity_contaminated(query, f"{stmt}\n{snippet}", url):
                 stats["dropped_entity_contamination"] += 1
@@ -99,6 +128,75 @@ def _filter_findings_for_synthesis(findings: list[dict], query: str) -> tuple[li
             filtered.append({**finding, "claims": kept_claims})
             stats["claims_kept"] += len(kept_claims)
     return filtered, stats
+
+
+def _claim_dimension(text: str) -> str:
+    lower = (text or "").lower()
+    for dimension, terms in _COVERAGE_DIMENSIONS.items():
+        if any(term in lower for term in terms):
+            return dimension
+    return "general"
+
+
+def _format_coverage_matrix(findings: list[dict], query: str) -> str:
+    if not is_comparison_query(query):
+        return ""
+    entities = sorted(entities_in_text(query))
+    if len(entities) < 2:
+        return ""
+    coverage = {
+        entity: {dimension: 0 for dimension in _COVERAGE_DIMENSIONS}
+        for entity in entities
+    }
+    for finding in findings:
+        for claim in finding.get("claims") or []:
+            text = f"{claim.get('statement', '')} {claim.get('snippet', '')} {claim.get('source_url', '')}"
+            mentioned = set(claim.get("attributed_entities") or []) | entities_in_text(text)
+            dimension = _claim_dimension(text)
+            if dimension not in _COVERAGE_DIMENSIONS:
+                continue
+            for entity in mentioned & set(entities):
+                coverage[entity][dimension] += 1
+    lines = ["\n\n--- Comparison coverage matrix ---"]
+    lines.append(
+        "For any table cell with 0 validated claims, write exactly `Insufficient data found`."
+    )
+    lines.append("| Entity | Dimension | Validated claims |")
+    lines.append("| --- | --- | --- |")
+    for entity in entities:
+        for dimension, count in coverage[entity].items():
+            lines.append(f"| {entity} | {dimension} | {count} |")
+    return "\n".join(lines)
+
+
+def _format_plan_coverage(research_plan: dict, findings: list[dict]) -> str:
+    if not research_plan or not research_plan.get("research_cells"):
+        return ""
+    coverage = build_cell_coverage(research_plan, findings)
+    lines = ["\n\n--- Research plan coverage ---"]
+    if research_plan.get("query_intent"):
+        lines.append(f"Intent: {research_plan.get('query_intent')}")
+    if research_plan.get("synthesis_requirements"):
+        lines.append("Synthesis requirements:")
+        lines.extend(f"- {item}" for item in research_plan.get("synthesis_requirements") or [])
+    lines.append(
+        "For any required cell that is not filled, write exactly "
+        "`Insufficient verified data after targeted research` and explain the missing evidence."
+    )
+    lines.append("| Cell | Entity | Dimension | Required evidence | Validated claims | Status |")
+    lines.append("| --- | --- | --- | ---: | ---: | --- |")
+    for cell in coverage:
+        lines.append(
+            "| {cell_id} | {entity} | {dimension} | {required} | {count} | {status} |".format(
+                cell_id=cell.get("cell_id") or cell.get("id"),
+                entity=cell.get("entity") or "-",
+                dimension=cell.get("dimension") or "-",
+                required=cell.get("required_evidence") or 1,
+                count=cell.get("validated_claims") or 0,
+                status=cell.get("cell_status") or "unfilled",
+            )
+        )
+    return "\n".join(lines)
 
 
 def _empty_evidence_report(query: str) -> str:
@@ -207,7 +305,13 @@ def synthesizer_node(state: AgentState) -> dict:
 
     prompt = SYNTHESIZER_PROMPT.format(
         query=state["user_query"],
-        findings=_format_findings_for_prompt(sourced_findings, cmap),
+        findings=(
+            _format_findings_for_prompt(sourced_findings, cmap)
+            + (
+                _format_plan_coverage(state.get("research_plan", {}), sourced_findings)
+                or _format_coverage_matrix(sourced_findings, state["user_query"])
+            )
+        ),
     )
 
     response = invoke_with_rotation(
@@ -241,6 +345,8 @@ def synthesizer_node(state: AgentState) -> dict:
         dropped_unsourced=stats["dropped_unsourced"],
         dropped_entity=stats["dropped_entity_contamination"],
         dropped_duplicate=stats["dropped_duplicate_claims"],
+        dropped_blocked=stats["dropped_blocked_source"],
+        dropped_invalid=stats["dropped_invalid_validation"],
         development=False,
     )
     return {

@@ -56,9 +56,13 @@ combining and organizing the findings.
    original intent and any targeted gap research.
 9. If `Known gaps` are listed, include them in `Limitations / Unknowns` unless
    other claims directly resolve them.
-10. **Do not write a `## Sources` section** — it is appended automatically from
+10. If the research plan coverage says a required cell is not filled, write
+   exactly "Insufficient verified data after targeted research" for that cell.
+   Do not soften this into filler such as "details are not explicitly stated",
+   "remains unclear", or "not well-represented".
+11. **Do not write a `## Sources` section** — it is appended automatically from
    the citation map after your draft is post-processed.
-11. **Length**: 500-1500 words (adapt to complexity).
+12. **Length**: 500-1500 words (adapt to complexity).
 
 # Tone
 Professional but accessible. Like a McKinsey/Bain analyst report, not Wikipedia.

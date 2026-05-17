@@ -15,17 +15,21 @@ def is_development() -> bool:
     return APP_MODE == "development"
 
 
-def _env_required_in_production(name: str) -> str | None:
+def _env_required_in_production(name: str, *alternatives: str) -> str | None:
     value = os.getenv(name)
     if APP_MODE == "production" and not value:
-        raise RuntimeError(f"{name} is required when APP_MODE=production")
+        for alt in alternatives:
+            if os.getenv(alt):
+                return value
+        allowed = " or ".join((name, *alternatives))
+        raise RuntimeError(f"{allowed} is required when APP_MODE=production")
     return value
 
 
 # Env vars
-GROQ_API_KEY = _env_required_in_production("GROQ_API_KEY")
-GOOGLE_API_KEY = _env_required_in_production("GOOGLE_API_KEY")
-TAVILY_API_KEY = _env_required_in_production("TAVILY_API_KEY")
+GROQ_API_KEY = _env_required_in_production("GROQ_API_KEY", "GROQ_API_KEYS")
+GOOGLE_API_KEY = _env_required_in_production("GOOGLE_API_KEY", "GOOGLE_API_KEYS")
+TAVILY_API_KEY = _env_required_in_production("TAVILY_API_KEY", "TAVILY_API_KEYS")
 GROQ_API_KEYS = os.getenv("GROQ_API_KEYS", GROQ_API_KEY or "")
 GOOGLE_API_KEYS = os.getenv("GOOGLE_API_KEYS", GOOGLE_API_KEY or "")
 TAVILY_API_KEYS = os.getenv("TAVILY_API_KEYS", TAVILY_API_KEY or "")
@@ -34,11 +38,16 @@ OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 
 # Configs
 MAX_ITERATIONS = int(os.getenv("MAX_RESEARCH_ITERATIONS", "3"))
-MAX_PARALLEL = int(os.getenv("MAX_PARALLEL_RESEARCHERS", "3"))
+MAX_PARALLEL = int(os.getenv("MAX_PARALLEL_RESEARCHERS", "1"))
 MAX_SUBTASKS = int(os.getenv("MAX_SUBTASKS", "5"))
 MAX_GAP_ROUNDS = int(os.getenv("MAX_GAP_ROUNDS", "1"))
 MAX_SOURCES_PER_TASK = int(os.getenv("MAX_SOURCES_PER_TASK", "4"))
+MAX_DIRECT_FETCHES_PER_TASK = int(os.getenv("MAX_DIRECT_FETCHES_PER_TASK", "2"))
 SOURCE_BROKER_SEARCH_RESULTS = int(os.getenv("SOURCE_BROKER_SEARCH_RESULTS", "8"))
+GROQ_SYNTHESIZER_MAX_TOKENS = int(os.getenv("GROQ_SYNTHESIZER_MAX_TOKENS", "3000"))
+GROQ_SYNTHESIZER_FALLBACK_MAX_TOKENS = int(
+    os.getenv("GROQ_SYNTHESIZER_FALLBACK_MAX_TOKENS", "2200")
+)
 REACT_MAX_STEPS = 6  # Max tool calls per researcher
 SEARCH_PROVIDER_ORDER = [
     p.strip().lower()
@@ -108,10 +117,14 @@ def get_synthesizer_llm():
 
     from app.provider_rotation import GROQ_SYNTHESIZER_MODELS
 
+    model = GROQ_SYNTHESIZER_MODELS.current()
+    max_tokens = GROQ_SYNTHESIZER_MAX_TOKENS
+    if "8b" in model.lower() or "instant" in model.lower():
+        max_tokens = min(max_tokens, GROQ_SYNTHESIZER_FALLBACK_MAX_TOKENS)
     return ChatGroq(
-        model=GROQ_SYNTHESIZER_MODELS.current(),
+        model=model,
         temperature=0.3,
-        max_tokens=8000,  # Long reports
+        max_tokens=max_tokens,
         api_key=_current_groq_key(),
         max_retries=1,
     )

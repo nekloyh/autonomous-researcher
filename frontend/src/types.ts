@@ -8,6 +8,13 @@ export interface SubTask {
   rationale: string;
   dependencies: string[];
   status?: TaskStatus;
+  cell_id?: string;
+  entity?: string;
+  dimension?: string;
+  target_queries?: string[];
+  required_evidence?: number;
+  success_criteria?: string[];
+  allow_insufficient_data?: boolean;
 }
 
 export interface ToolCallCounts {
@@ -28,7 +35,8 @@ export interface Finding {
   confidence: number;
   source_quality?: number;
   tool_calls: number;
-  // UI-only enrichment (mock/demo); the live SSE payload does not carry these.
+  source_count?: number;
+  // UI-only enrichment for compact live cards.
   excerpt?: string;
   tools?: ToolCallCounts;
 }
@@ -38,6 +46,20 @@ export interface Claim {
   source_url: string;
   snippet: string;
   confidence: number;
+  source_domain?: string;
+  source_type?: string;
+  source_policy_tier?: "blocked" | "preferred" | "allowed";
+  evidence_years?: string[];
+  raw_snippet?: string;
+  attributed_entities?: string[];
+  validation_status?: "valid" | "low_confidence" | "dropped";
+  validation_warnings?: string[];
+  cell_id?: string;
+  entity?: string;
+  dimension?: string;
+  evidence_type?: string;
+  document_section?: string;
+  page_or_chunk?: string;
 }
 
 export interface ResearchGap {
@@ -52,8 +74,11 @@ export interface SourceCandidate {
   title?: string;
   domain?: string;
   source_type?: "official" | "reputable_media" | "database" | "generic" | "unknown";
+  source_policy_tier?: "blocked" | "preferred" | "allowed";
+  year_status?: "matched" | "unknown" | "mismatch";
   rank_score?: number;
   assigned_task_ids?: string[];
+  assigned_cell_ids?: string[];
 }
 
 export interface CriticScores {
@@ -98,10 +123,25 @@ export type Phase = "idle" | "running" | "done";
 
 // SSE event payloads from /research/stream (see app/api/server.py:_summarize).
 export type SSEUpdate =
-  | { node: "planner" | "replan" | "gap_planner"; plan_size: number; iteration: number }
+  | {
+      node: "planner" | "replan" | "gap_planner";
+      plan_size: number;
+      iteration: number;
+      tasks: SubTask[];
+      tokens: number;
+    }
   | { node: "source_broker"; source_candidates: SourceCandidate[]; tool_calls: number }
-  | { node: "researcher"; task_id: string; sources: number; confidence: number }
-  | { node: "synthesizer"; draft_words: number; citations: number }
+  | {
+      node: "researcher";
+      task_id: string;
+      sources: number;
+      confidence: number;
+      tool_calls: number;
+      claims_count: number;
+      excerpt: string;
+      tokens: number;
+    }
+  | { node: "synthesizer"; draft_words: number; citations: number; tokens: number }
   | {
       node: "critic";
       action?: "finalize" | "research_gaps" | "replan";
@@ -109,11 +149,14 @@ export type SSEUpdate =
       is_complete: boolean;
       missing: string[];
       gaps?: ResearchGap[];
+      factual_errors?: string[];
+      suggestions?: string[];
+      tokens: number;
     }
   | {
       node: "finalize";
       final_words: number;
-      quality_status?: "verified" | "unverified";
+      quality_status?: "verified" | "partial" | "unverified";
       quality_warnings?: string[];
       run_summary_path?: string;
     };
@@ -127,7 +170,7 @@ export type SSEEvent =
         session_id: string;
         final_report: string;
         citations: string[];
-        quality_status?: "verified" | "unverified";
+        quality_status?: "verified" | "partial" | "unverified";
         quality_warnings?: string[];
         gaps?: ResearchGap[];
         run_summary_path?: string;

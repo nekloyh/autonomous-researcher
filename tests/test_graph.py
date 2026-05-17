@@ -8,6 +8,7 @@ from app.graph import (
     fan_out_or_synthesize,
     finalize_node,
     gap_planner_node,
+    quality_gate_node,
 )
 from app.state import AgentState
 
@@ -43,7 +44,8 @@ def test_fan_out_skips_to_synth_when_plan_empty():
     assert fan_out_or_synthesize(s) == "synthesizer"
 
 
-def test_fan_out_emits_sends_for_pending_tasks():
+def test_fan_out_emits_sends_for_pending_tasks(monkeypatch):
+    monkeypatch.setattr("app.graph.MAX_PARALLEL", 2)
     plan = [
         {"id": "task_1", "question": "Q1", "rationale": "R", "dependencies": [], "status": "pending"},
         {"id": "task_2", "question": "Q2", "rationale": "R", "dependencies": [], "status": "pending"},
@@ -133,6 +135,82 @@ def test_after_critic_finishes_when_complete():
     assert after_critic(s) == "finalize"
 
 
+def test_finalize_unverified_when_critic_has_unsupported_claims():
+    findings = [
+        {
+            "task_id": "t1",
+            "content": "x",
+            "claims": [
+                {"statement": "A", "source_url": "https://a.example", "snippet": "A", "confidence": 0.9},
+                {"statement": "B", "source_url": "https://b.example", "snippet": "B", "confidence": 0.9},
+                {"statement": "C", "source_url": "https://c.example", "snippet": "C", "confidence": 0.9},
+            ],
+        }
+    ]
+    s = _state(
+        current_iteration=1,
+        draft_report="# Draft\n\nA [1]. B [2]. C [3].",
+        citations=["https://a.example", "https://b.example", "https://c.example"],
+        findings=findings,
+        critiques=[
+            {
+                "action": "finalize",
+                "is_complete": True,
+                "quality_score": 0.92,
+                "missing_info": [],
+                "gaps": [],
+                "factual_errors": [],
+                "unsupported_claims": ["Unsupported sentence"],
+                "conflicting_claims": [],
+                "suggestions": [],
+            }
+        ],
+    )
+
+    out = finalize_node(s)
+    assert out["quality_status"] == "unverified"
+    assert "unsupported claims" in "; ".join(out["quality_warnings"])
+    assert "Verification warning" in out["final_report"]
+
+
+def test_finalize_partial_for_hard_stop_without_severe_failures():
+    findings = [
+        {
+            "task_id": "t1",
+            "content": "x",
+            "claims": [
+                {"statement": "A", "source_url": "https://a.example", "snippet": "A", "confidence": 0.9},
+                {"statement": "B", "source_url": "https://b.example", "snippet": "B", "confidence": 0.9},
+                {"statement": "C", "source_url": "https://c.example", "snippet": "C", "confidence": 0.9},
+            ],
+        }
+    ]
+    s = _state(
+        current_iteration=3,
+        max_iterations=3,
+        draft_report="# Draft\n\nA [1]. B [2]. C [3].",
+        citations=["https://a.example", "https://b.example", "https://c.example"],
+        findings=findings,
+        critiques=[
+            {
+                "action": "finalize",
+                "is_complete": True,
+                "quality_score": 0.7,
+                "missing_info": [],
+                "gaps": [{"question": "Add more market context", "priority": "medium"}],
+                "factual_errors": [],
+                "unsupported_claims": [],
+                "conflicting_claims": [],
+                "suggestions": [],
+            }
+        ],
+    )
+
+    out = finalize_node(s)
+    assert out["quality_status"] == "partial"
+    assert "partially verified" in out["final_report"]
+
+
 def test_after_critic_replans_when_incomplete():
     s = _state(
         critiques=[{"action": "replan", "is_complete": False, "quality_score": 0.4, "missing_info": ["What is X?"], "factual_errors": [], "suggestions": []}],
@@ -209,6 +287,52 @@ def test_gap_planner_creates_temporary_gap_tasks():
     assert out["plan"][0]["question"] == "Find launch date"
 
 
+def test_quality_gate_creates_researchable_gap_questions():
+    s = _state(
+        user_query="MoMo market share in 2024",
+        current_iteration=1,
+        critiques=[
+            {
+                "action": "finalize",
+                "is_complete": True,
+                "quality_score": 0.9,
+                "missing_info": [],
+                "gaps": [],
+                "factual_errors": [],
+                "suggestions": [],
+            }
+        ],
+        citations=["https://momo.vn"],
+        findings=[
+            {
+                "task_id": "t1",
+                "content": "x",
+                "sources": ["https://momo.vn"],
+                "claims": [
+                    {
+                        "statement": "MoMo has a payments wallet.",
+                        "source_url": "https://momo.vn",
+                        "snippet": "MoMo has a payments wallet.",
+                        "confidence": 0.9,
+                    }
+                ],
+                "confidence": 0.9,
+                "tool_calls": 1,
+            }
+        ],
+    )
+    update = quality_gate_node(s)
+    gap_question = update["critiques"][0]["gaps"][0]["question"]
+
+    assert "source-backed claims" in gap_question
+    assert "MoMo market share in 2024" in gap_question
+    assert "only 1 citations found" not in gap_question
+
+    s.update(update)
+    out = gap_planner_node(s)
+    assert out["plan"][0]["question"] == gap_question
+
+
 def test_critic_provider_failure_replans_before_max(monkeypatch):
     class BrokenLLM:
         def with_structured_output(self, *args, **kwargs):  # noqa: ARG002
@@ -264,6 +388,50 @@ def test_critic_provider_failure_finalizes_unverified_at_max(monkeypatch):
     assert out["quality_status"] == "unverified"
     assert "Verification warning" in out["final_report"]
     assert "critic/provider failure" in out["final_report"]
+
+
+def test_recovered_critic_provider_failure_does_not_block_verified_output():
+    failed = {
+        "action": "replan",
+        "is_complete": False,
+        "quality_score": 0.0,
+        "factual_errors": ["critic/provider failure: ServerError: 503 UNAVAILABLE"],
+    }
+    recovered = {
+        "action": "finalize",
+        "is_complete": True,
+        "quality_score": 0.8,
+        "missing_info": [],
+        "factual_errors": [],
+        "unsupported_claims": [],
+        "conflicting_claims": [],
+    }
+    final_state = _state(
+        current_iteration=2,
+        max_iterations=3,
+        draft_report="# Draft\nSupported [1] [2] [3]",
+        citations=["https://a.example", "https://b.example", "https://c.example"],
+        findings=[
+            {
+                "task_id": "task_1",
+                "sub_question": "Q",
+                "answer": "A",
+                "claims": [
+                    {"statement": "A", "source_url": "https://a.example", "snippet": "A", "confidence": 0.9},
+                    {"statement": "B", "source_url": "https://b.example", "snippet": "B", "confidence": 0.9},
+                    {"statement": "C", "source_url": "https://c.example", "snippet": "C", "confidence": 0.9},
+                ],
+            }
+        ],
+        critiques=[failed, recovered],
+        errors=["critic/provider failure: ServerError: 503 UNAVAILABLE"],
+    )
+    out = finalize_node(final_state)
+    assert out["quality_status"] == "verified"
+    assert "Verification warning" not in out["final_report"]
+    assert out["quality_warnings"] == [
+        "critic/provider failure recovered after a later successful review"
+    ]
 
 
 def test_build_graph_compiles():

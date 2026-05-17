@@ -14,7 +14,9 @@ T = TypeVar("T")
 
 _LIMIT_RE = re.compile(
     r"(rate limit|too many requests|429|quota|resource_exhausted|tokens per minute|"
-    r"requests per minute|tpm|rpm|rpd|tpd|insufficient_quota)",
+    r"requests per minute|tpm|rpm|rpd|tpd|insufficient_quota|503|unavailable|"
+    r"service unavailable|temporarily unavailable|high demand|overloaded|413|"
+    r"request too large|rate_limit_exceeded)",
     re.IGNORECASE,
 )
 
@@ -37,6 +39,20 @@ def retry_after_seconds(exc: Exception, default: float = 1.0) -> float:
     match = re.search(r"retry[- ]after[:= ]+(\d+(?:\.\d+)?)", text, re.IGNORECASE)
     if match:
         return min(30.0, max(0.0, float(match.group(1))))
+    match = re.search(
+        r"(?:try again|retry) in (\d+(?:\.\d+)?)\s*"
+        r"(ms|s|sec|secs|second|seconds|m|min|minute|minutes)",
+        text,
+        re.IGNORECASE,
+    )
+    if match:
+        value = float(match.group(1))
+        unit = match.group(2).lower()
+        if unit == "ms":
+            value /= 1000
+        elif unit.startswith("m"):
+            value *= 60
+        return min(30.0, max(0.0, value))
     return default
 
 

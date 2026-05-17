@@ -11,6 +11,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.config import MAX_ITERATIONS, get_critic_llm, is_development
+from app.gaps import dedupe_gaps
 from app.logger import log_event
 from app.observability import tokens_from_response
 from app.prompts import CRITIC_PROMPT
@@ -258,6 +259,7 @@ def critic_node(state: AgentState) -> dict:
                 }
             )
 
+    gaps = dedupe_gaps(gaps)
     critique: Critique = {
         "action": action,
         "is_complete": is_complete,
